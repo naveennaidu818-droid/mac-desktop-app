@@ -43,6 +43,10 @@ npm run dist:mac:release
 
 The release command regenerates branding assets, builds the universal app, signs it with the hardened runtime, submits it for notarization, staples its ticket, and verifies the code signature, Gatekeeper assessment, notarization ticket, architecture slices, PKG signature, and update metadata.
 
+## Test Builds
+
+GitHub Actions includes **Build macOS test installers** for smoke testing without Apple credentials. It produces unsigned universal DMG and ZIP artifacts for Intel and Apple Silicon. macOS will warn before opening these artifacts; they are only for testing and must not be distributed to customers.
+
 ## CI Secrets
 
 The included GitHub Actions workflow expects:
