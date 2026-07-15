@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file:; style-src 'self' 'unsafe-inline'; script-src 'self';">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>About VitelGlobal Desktop</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="about-shell">
+      <img class="brand-logo" src="../../build/icons/vitelglobal-logo.svg" alt="VitelGlobal">
+      <h1>VitelGlobal Desktop</h1>
+      <dl>
+        <div>
+          <dt>Version</dt>
+          <dd id="version">-</dd>
+        </div>
+        <div>
+          <dt>Platform</dt>
+          <dd id="platform">-</dd>
+        </div>
+        <div>
+          <dt>Service</dt>
+          <dd id="service">-</dd>
+        </div>
+        <div>
+          <dt>Logs</dt>
+          <dd id="logs-path">-</dd>
+        </div>
+      </dl>
+      <div class="actions">
+        <button id="updates" type="button">Check Updates</button>
+        <button id="logs" type="button" class="secondary">Open Logs</button>
+      </div>
+      <p id="update-status" class="status-text"></p>
+    </main>
+    <script src="./about.js"></script>
+  </body>
+</html>

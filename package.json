@@ -1,0 +1,184 @@
+{
+  "name": "vitelglobal-desktop",
+  "version": "1.0.0",
+  "description": "Enterprise Electron desktop shell for VitelGlobal Office Meetings.",
+  "author": "VitelGlobal",
+  "homepage": "https://www.vitelglobal.com/",
+  "main": "src/main/index.js",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "lint": "node scripts/validate-config.js",
+    "assets": "node scripts/generate-assets.js",
+    "pack": "npm run assets && electron-builder --dir --config.directories.output=dist/unpacked",
+    "dist": "npm run assets && electron-builder",
+    "dist:win": "npm run assets && electron-builder --win nsis portable --config.directories.output=dist/windows",
+    "dist:mac": "npm run dist:mac:release",
+    "dist:mac:release": "node scripts/require-macos-release.js && npm run assets && electron-builder --mac dmg pkg zip --universal --config.directories.output=dist/macos && npm run verify:mac:release -- dist/macos",
+    "pack:mac": "npm run assets && electron-builder --mac --dir --universal --config.directories.output=dist/macos-unpacked",
+    "verify:mac:release": "node scripts/verify-macos-release.js",
+    "dist:linux": "npm run assets && electron-builder --linux AppImage deb rpm --config.directories.output=dist/linux",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "electron-log": "^5.4.4",
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
+    "png-to-ico": "^3.0.2",
+    "sharp": "^0.35.3"
+  },
+  "build": {
+    "appId": "com.vitelglobal.desktop",
+    "productName": "VitelGlobal Desktop",
+    "copyright": "Copyright © 2026 VitelGlobal",
+    "asar": true,
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "build/icons/**/*",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "src/main/index.js"
+    },
+    "protocols": [
+      {
+        "name": "VitelGlobal Desktop",
+        "schemes": [
+          "vitelglobal"
+        ]
+      }
+    ],
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://updates.vitelglobal.com/desktop/"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icons/icon.ico",
+      "artifactName": "${productName}-${version}-${arch}-win.${ext}",
+      "requestedExecutionLevel": "asInvoker",
+      "verifyUpdateCodeSignature": true
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "VitelGlobal Desktop",
+      "installerIcon": "build/icons/icon.ico",
+      "uninstallerIcon": "build/icons/icon.ico",
+      "installerHeaderIcon": "build/icons/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "${productName}-${version}-${arch}-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-${arch}-portable.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "pkg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "icon": "build/icons/icon.icns",
+      "category": "public.app-category.business",
+      "minimumSystemVersion": "12.0.0",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "artifactName": "${productName}-${version}-${arch}-macos.${ext}",
+      "extendInfo": {
+        "NSCameraUsageDescription": "VitelGlobal Desktop uses your camera for video meetings and calls.",
+        "NSMicrophoneUsageDescription": "VitelGlobal Desktop uses your microphone for meetings and calls.",
+        "NSAudioCaptureUsageDescription": "VitelGlobal Desktop uses system audio only when you choose to share it during a meeting.",
+        "NSScreenCaptureUsageDescription": "VitelGlobal Desktop uses screen recording only when you choose to share your screen during a meeting."
+      }
+    },
+    "dmg": {
+      "title": "VitelGlobal Desktop ${version}",
+      "background": "build/dmg-background.png",
+      "icon": "build/icons/icon.icns",
+      "iconSize": 112,
+      "iconTextSize": 13,
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 155,
+          "y": 225,
+          "type": "file"
+        },
+        {
+          "x": 385,
+          "y": 225,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "pkg": {
+      "allowAnywhere": false,
+      "allowCurrentUserHome": false,
+      "allowRootDirectory": true,
+      "installLocation": "/Applications",
+      "isRelocatable": true,
+      "isVersionChecked": true,
+      "overwriteAction": "upgrade"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ],
+      "icon": "build/icons",
+      "category": "Network",
+      "synopsis": "VitelGlobal unified communications desktop app",
+      "maintainer": "VitelGlobal",
+      "artifactName": "${productName}-${version}-${arch}-${os}.${ext}"
+    }
+  }
+}

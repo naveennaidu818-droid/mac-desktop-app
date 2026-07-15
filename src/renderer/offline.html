@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file:; style-src 'self' 'unsafe-inline'; script-src 'self';">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VitelGlobal Desktop</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="state-shell">
+      <img class="brand-logo" src="../../build/icons/vitelglobal-logo.svg" alt="VitelGlobal">
+      <section class="state-panel">
+        <p class="eyebrow">Connection interrupted</p>
+        <h1>VitelGlobal Desktop could not reach the service.</h1>
+        <p id="details">Check your network or VPN connection, then try again.</p>
+        <div class="actions">
+          <button id="retry" type="button">Retry</button>
+          <button id="logs" type="button" class="secondary">Open Logs</button>
+        </div>
+      </section>
+    </main>
+    <script src="./offline.js"></script>
+  </body>
+</html>
