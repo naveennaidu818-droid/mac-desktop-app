@@ -35,13 +35,41 @@ let splashWindow;
 let tray;
 let isQuitting = false;
 let pendingDeepLink;
+let pendingNotificationClick = null;
+const activeNativeNotifications = new Set();
 let autoUpdater;
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 app.name = APP_NAME;
 app.setAppUserModelId("com.vitelglobal.desktop");
+
+if (process.platform === "win32") {
+  const shortcutPath = path.join(
+    app.getPath("appData"),
+    "Microsoft",
+    "Windows",
+    "Start Menu",
+    "Programs",
+    "VitelGlobal Desktop.lnk"
+  );
+  try {
+    const fs = require("node:fs");
+    // Write or overwrite the shortcut to ensure it points to the currently running process path
+    shell.writeShortcutLink(shortcutPath, "create", {
+      target: process.execPath,
+      appUserModelId: "com.vitelglobal.desktop",
+      description: "VitelGlobal Desktop enterprise communications shell"
+    });
+    log.info("Registered Windows Start Menu shortcut link at:", shortcutPath);
+  } catch (err) {
+    log.error("Failed to register Start Menu shortcut for notifications:", err);
+  }
+}
+
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 app.commandLine.appendSwitch("enable-features", "WebRTCPipeWireCapturer");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
 
 log.initialize({ preload: true });
 log.transports.file.level = "info";
@@ -99,7 +127,7 @@ function send(channel, payload) {
   }
 }
 
-function showNativeNotification({ title = APP_NAME, body = "", silent = false } = {}) {
+function showNativeNotification({ title = APP_NAME, body = "", silent = false, type = "", screen = "", data = {} } = {}) {
   if (!Notification.isSupported()) {
     return false;
   }
@@ -110,6 +138,37 @@ function showNativeNotification({ title = APP_NAME, body = "", silent = false } 
     icon: iconPath(),
     silent
   });
+
+  activeNativeNotifications.add(notification);
+
+  // For incoming calls, flash the taskbar to draw attention even when minimized
+  if (type === "incoming-call" && mainWindow && !mainWindow.isDestroyed()) {
+    if (!mainWindow.isFocused()) {
+      mainWindow.flashFrame(true);
+      // Stop flashing once the user focuses the window
+      mainWindow.once("focus", () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.flashFrame(false);
+        }
+      });
+    }
+  }
+
+  notification.on("click", () => {
+    activeNativeNotifications.delete(notification);
+    pendingNotificationClick = { type, screen, data };
+    showMainWindow();
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("notification-click", { type, screen, data });
+      }
+    }, 200);
+  });
+
+  notification.on("close", () => {
+    activeNativeNotifications.delete(notification);
+  });
+
   notification.show();
   return true;
 }
@@ -153,7 +212,8 @@ function createMainWindow() {
       nodeIntegration: false,
       webSecurity: true,
       allowRunningInsecureContent: false,
-      spellcheck: true
+      spellcheck: true,
+      backgroundThrottling: false
     }
   });
 
@@ -166,6 +226,18 @@ function createMainWindow() {
         body: "VitelGlobal Desktop is still running in the system tray.",
         silent: true
       });
+    }
+  });
+
+  mainWindow.on("focus", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("window-activated");
+    }
+  });
+
+  mainWindow.on("restore", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("window-activated");
     }
   });
 
@@ -270,6 +342,15 @@ function showMainWindow() {
   }
   mainWindow.show();
   mainWindow.focus();
+
+  // Force window to foreground (focus steal) on OS level
+  if (process.platform === "darwin") {
+    app.focus({ steal: true });
+  } else {
+    mainWindow.setAlwaysOnTop(true);
+    mainWindow.focus();
+    mainWindow.setAlwaysOnTop(false);
+  }
 }
 
 function createMenu() {
@@ -502,6 +583,17 @@ function registerIpc() {
   ipcMain.handle("app:read-clipboard", () => clipboard.readText());
   ipcMain.handle("app:write-clipboard", (_event, text) => clipboard.writeText(String(text ?? "")));
   ipcMain.handle("app:notify", (_event, payload) => showNativeNotification(payload));
+  ipcMain.handle("app:focus", () => showMainWindow());
+  ipcMain.handle("app:flash-frame", (_event, enabled) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.flashFrame(Boolean(enabled));
+    }
+  });
+  ipcMain.handle("app:get-pending-notification-click", () => {
+    const temp = pendingNotificationClick;
+    pendingNotificationClick = null;
+    return temp;
+  });
   ipcMain.handle("app:check-for-updates", () => checkForUpdates());
   ipcMain.handle("app:get-auto-launch", () => app.getLoginItemSettings().openAtLogin);
   ipcMain.handle("app:set-auto-launch", (_event, enabled) => {

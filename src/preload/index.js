@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld("vitelDesktop", {
   readClipboard: () => invoke("app:read-clipboard"),
   writeClipboard: (text) => invoke("app:write-clipboard", text),
   notify: (payload) => invoke("app:notify", payload),
+  focus: () => invoke("app:focus"),
+  flashFrame: (enabled) => invoke("app:flash-frame", enabled),
   checkForUpdates: () => invoke("app:check-for-updates"),
   getAutoLaunch: () => invoke("app:get-auto-launch"),
   setAutoLaunch: (enabled) => invoke("app:set-auto-launch", Boolean(enabled)),
@@ -30,5 +32,8 @@ contextBridge.exposeInMainWorld("vitelDesktop", {
   onDownloadProgress: (callback) => on("download:progress", callback),
   onDownloadDone: (callback) => on("download:done", callback),
   onUpdateStatus: (callback) => on("update:status", callback),
-  onUpdateProgress: (callback) => on("update:progress", callback)
+  onUpdateProgress: (callback) => on("update:progress", callback),
+  getPendingNotificationClick: () => invoke("app:get-pending-notification-click"),
+  onWindowActivated: (callback) => on("window-activated", callback),
+  onNotificationClick: (callback) => on("notification-click", callback)
 });
