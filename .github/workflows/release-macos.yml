@@ -14,7 +14,7 @@ jobs:
     name: Sign, notarize, and verify universal macOS release
     runs-on: macos-14
     env:
-      CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+      MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
       CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
       APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
@@ -28,6 +28,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      - name: Restore signing certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          certificate_path="$RUNNER_TEMP/vitelglobal-codesign.p12"
+          printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_path"
+          test -s "$certificate_path"
+          chmod 600 "$certificate_path"
+          echo "CSC_LINK=$certificate_path" >> "$GITHUB_ENV"
 
       - name: Restore notarization API key
         shell: bash
