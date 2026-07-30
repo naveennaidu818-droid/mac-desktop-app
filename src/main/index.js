@@ -20,6 +20,7 @@ const {
   desktopCapturer
 } = require("electron");
 const log = require("electron-log/main");
+const { createNotificationService } = require("./notificationService");
 
 const APP_NAME = "VitelGlobal Desktop";
 const APP_URL = process.env.VITELGLOBAL_APP_URL || "https://desktop.officemeetings.net/";
@@ -36,12 +37,15 @@ let tray;
 let isQuitting = false;
 let pendingDeepLink;
 let autoUpdater;
+let notificationService;
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 app.name = APP_NAME;
 app.setAppUserModelId("com.vitelglobal.desktop");
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 app.commandLine.appendSwitch("enable-features", "WebRTCPipeWireCapturer");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
 
 log.initialize({ preload: true });
 log.transports.file.level = "info";
@@ -99,19 +103,8 @@ function send(channel, payload) {
   }
 }
 
-function showNativeNotification({ title = APP_NAME, body = "", silent = false } = {}) {
-  if (!Notification.isSupported()) {
-    return false;
-  }
-
-  const notification = new Notification({
-    title: String(title).slice(0, 120),
-    body: String(body).slice(0, 500),
-    icon: iconPath(),
-    silent
-  });
-  notification.show();
-  return true;
+function showNativeNotification({ title = APP_NAME, body = "", silent = false, type = "", screen = "", data = {} } = {}) {
+  return notificationService.show({ title, body, silent, type, screen, data });
 }
 
 function createSplashWindow() {
@@ -153,7 +146,8 @@ function createMainWindow() {
       nodeIntegration: false,
       webSecurity: true,
       allowRunningInsecureContent: false,
-      spellcheck: true
+      spellcheck: true,
+      backgroundThrottling: false
     }
   });
 
@@ -212,6 +206,15 @@ function createMainWindow() {
     log.warn("Renderer became unresponsive");
   });
 
+  mainWindow.webContents.on("did-start-loading", () => {
+    notificationService.markRendererLoading();
+    log.info("Renderer started loading", { url: mainWindow.webContents.getURL() });
+  });
+
+  mainWindow.webContents.on("did-finish-load", () => {
+    log.info("Renderer finished loading", { url: mainWindow.webContents.getURL() });
+  });
+
   mainWindow.webContents.session.on("will-download", (_event, item) => {
     const totalBytes = item.getTotalBytes();
     log.info("Download started", { fileName: item.getFilename(), totalBytes });
@@ -262,14 +265,20 @@ function createTray() {
 }
 
 function showMainWindow() {
-  if (!mainWindow) {
-    return;
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return false;
+  }
+  if (process.platform === "darwin") {
+    app.show();
+    app.dock?.show();
   }
   if (mainWindow.isMinimized()) {
     mainWindow.restore();
   }
   mainWindow.show();
   mainWindow.focus();
+  log.info("Main window restored and focused", { visible: mainWindow.isVisible(), minimized: mainWindow.isMinimized() });
+  return true;
 }
 
 function createMenu() {
@@ -501,7 +510,16 @@ function registerIpc() {
   ipcMain.handle("app:choose-files", () => chooseFiles(mainWindow));
   ipcMain.handle("app:read-clipboard", () => clipboard.readText());
   ipcMain.handle("app:write-clipboard", (_event, text) => clipboard.writeText(String(text ?? "")));
-  ipcMain.handle("app:notify", (_event, payload) => showNativeNotification(payload));
+ipcMain.handle("app:notify", (_event, payload) => showNativeNotification(payload));
+  ipcMain.handle("app:notification-listener-ready", () => notificationService.markClickListenerReady());
+  ipcMain.handle("app:get-pending-notification-click", () => notificationService.takePendingClick());
+  ipcMain.handle("app:focus", () => showMainWindow());
+  ipcMain.handle("app:restore", () => showMainWindow());
+  ipcMain.handle("app:flash-frame", (_event, enabled) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    mainWindow.flashFrame(Boolean(enabled));
+    return true;
+  });
   ipcMain.handle("app:check-for-updates", () => checkForUpdates());
   ipcMain.handle("app:get-auto-launch", () => app.getLoginItemSettings().openAtLogin);
   ipcMain.handle("app:set-auto-launch", (_event, enabled) => {
@@ -552,6 +570,7 @@ app.on("activate", () => {
     createMainWindow();
   } else {
     showMainWindow();
+    send("window-activated", { source: "app-activate" });
   }
 });
 
@@ -562,6 +581,13 @@ app.whenReady().then(async () => {
   }
 
   app.setAsDefaultProtocolClient("vitelglobal");
+  notificationService = createNotificationService({
+    Notification,
+    getMainWindow: () => mainWindow,
+    showMainWindow,
+    iconPath,
+    log
+  });
   configureSession();
   registerIpc();
   configureAutoUpdater();

@@ -21,7 +21,11 @@ contextBridge.exposeInMainWorld("vitelDesktop", {
   chooseFiles: () => invoke("app:choose-files"),
   readClipboard: () => invoke("app:read-clipboard"),
   writeClipboard: (text) => invoke("app:write-clipboard", text),
-  notify: (payload) => invoke("app:notify", payload),
+notify: (payload) => invoke("app:notify", payload),
+  focus: () => invoke("app:focus"),
+  restore: () => invoke("app:restore"),
+  flashFrame: (enabled) => invoke("app:flash-frame", Boolean(enabled)),
+  getPendingNotificationClick: () => invoke("app:get-pending-notification-click"),
   checkForUpdates: () => invoke("app:check-for-updates"),
   getAutoLaunch: () => invoke("app:get-auto-launch"),
   setAutoLaunch: (enabled) => invoke("app:set-auto-launch", Boolean(enabled)),
@@ -30,5 +34,11 @@ contextBridge.exposeInMainWorld("vitelDesktop", {
   onDownloadProgress: (callback) => on("download:progress", callback),
   onDownloadDone: (callback) => on("download:done", callback),
   onUpdateStatus: (callback) => on("update:status", callback),
-  onUpdateProgress: (callback) => on("update:progress", callback)
+  onUpdateProgress: (callback) => on("update:progress", callback),
+onNotificationClick: (callback) => {
+    const unsubscribe = on("notification-click", callback);
+    invoke("app:notification-listener-ready").catch(() => {});
+    return unsubscribe;
+  },
+  onWindowActivated: (callback) => on("window-activated", callback)
 });
