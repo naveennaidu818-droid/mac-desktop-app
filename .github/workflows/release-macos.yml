@@ -53,8 +53,8 @@ jobs:
           name: vitelglobal-desktop-macos-universal
           if-no-files-found: error
           path: |
-            dist/*.dmg
-            dist/*.pkg
-            dist/*.zip
-            dist/latest-mac.yml
-            dist/*.blockmap
+            dist/macos/*.dmg
+            dist/macos/*.pkg
+            dist/macos/*.zip
+            dist/macos/latest-mac.yml
+            dist/macos/*.blockmap
