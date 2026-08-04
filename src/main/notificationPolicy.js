@@ -90,7 +90,7 @@ function buildWindowsLaunchSpec({ isPackaged, execPath, portableExecutableFile, 
     target,
     args,
     protocolArgs: needsAppArg && resolvedAppPath ? [resolvedAppPath] : [],
-    cwd: isPackaged ? require("node:path").dirname(target) : (resolvedAppPath || process.cwd()),
+    cwd: isPackaged ? require("node:path").win32.dirname(target) : (resolvedAppPath || process.cwd()),
     icon: isPackaged ? target : String(brandedIconPath || target)
   };
 }
