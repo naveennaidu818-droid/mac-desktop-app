@@ -1,6 +1,6 @@
 {
   "name": "vitelglobal-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Enterprise Electron desktop shell for VitelGlobal Office Meetings.",
   "author": "VitelGlobal",
   "homepage": "https://www.vitelglobal.com/",
@@ -11,6 +11,7 @@
     "start": "electron .",
     "dev": "electron .",
     "lint": "node scripts/validate-config.js",
+    "test:notifications": "node scripts/test-notifications.js",
     "assets": "node scripts/generate-assets.js",
     "pack": "npm run assets && electron-builder --dir --config.directories.output=dist/unpacked",
     "dist": "npm run assets && electron-builder",
@@ -82,7 +83,7 @@
         }
       ],
       "icon": "build/icons/icon.ico",
-      "artifactName": "${productName}-${version}-${arch}-win.${ext}",
+      "artifactName": "desktop.officemeetings-${version}-${arch}-win.${ext}",
       "requestedExecutionLevel": "asInvoker",
       "verifyUpdateCodeSignature": true
     },
@@ -96,10 +97,10 @@
       "uninstallerIcon": "build/icons/icon.ico",
       "installerHeaderIcon": "build/icons/icon.ico",
       "deleteAppDataOnUninstall": false,
-      "artifactName": "${productName}-${version}-${arch}-setup.${ext}"
+      "artifactName": "desktop.officemeetings-${version}-${arch}-setup.${ext}"
     },
     "portable": {
-      "artifactName": "${productName}-${version}-${arch}-portable.${ext}"
+      "artifactName": "desktop.officemeetings-${version}-${arch}-portable.${ext}"
     },
     "mac": {
       "target": [

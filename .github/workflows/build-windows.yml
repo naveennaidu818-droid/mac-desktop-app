@@ -1,4 +1,4 @@
-name: Build macOS test installers
+name: Build Windows installers
 
 on:
   workflow_dispatch:
@@ -8,10 +8,8 @@ permissions:
 
 jobs:
   package:
-    name: Build unsigned universal macOS test installers
-    runs-on: macos-14
-    env:
-      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    name: Build Windows x64 installers
+    runs-on: windows-latest
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -25,19 +23,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Validate build configuration
+      - name: Validate desktop behavior
         run: |
           npm run lint
           npm run test:notifications
 
-      - name: Build universal macOS test installers
-        run: npm run dist:mac:test
+      - name: Build Windows Setup and Portable installers
+        run: npm run dist:win
 
-      - name: Upload macOS test installers
+      - name: Upload Windows installers
         uses: actions/upload-artifact@v4
         with:
-          name: vitelglobal-desktop-macos-test-universal
+          name: vitelglobal-desktop-windows-x64
           if-no-files-found: error
           path: |
-            dist/macos-test/*.dmg
-            dist/macos-test/*.zip
+            dist/windows/*-setup.exe
+            dist/windows/*-portable.exe
+            dist/windows/*.blockmap

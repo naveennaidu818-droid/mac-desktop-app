@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld("vitelDesktop", {
   readClipboard: () => invoke("app:read-clipboard"),
   writeClipboard: (text) => invoke("app:write-clipboard", text),
   notify: (payload) => invoke("app:notify", payload),
+  clearNotifications: (type) => invoke("app:clear-notifications", type),
   focus: () => invoke("app:focus"),
   flashFrame: (enabled) => invoke("app:flash-frame", enabled),
   checkForUpdates: () => invoke("app:check-for-updates"),
