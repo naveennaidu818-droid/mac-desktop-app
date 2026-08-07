@@ -1,6 +1,6 @@
 {
   "name": "vitelglobal-desktop",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "Enterprise Electron desktop shell for VitelGlobal Office Meetings.",
   "author": "VitelGlobal",
   "homepage": "https://www.vitelglobal.com/",
@@ -131,6 +131,7 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "artifactName": "${productName}-${version}-${arch}-macos.${ext}",
       "extendInfo": {
+        "NSUserNotificationAlertStyle": "alert",
         "NSCameraUsageDescription": "VitelGlobal Desktop uses your camera for video meetings and calls.",
         "NSMicrophoneUsageDescription": "VitelGlobal Desktop uses your microphone for meetings and calls.",
         "NSAudioCaptureUsageDescription": "VitelGlobal Desktop uses system audio only when you choose to share it during a meeting.",

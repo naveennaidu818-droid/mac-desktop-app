@@ -69,6 +69,7 @@ const assertions = [
   [pkg.build?.mac?.minimumSystemVersion === "12.0.0", "macOS minimum version is Monterey (12.0)"],
   [pkg.build?.mac?.hardenedRuntime === true, "macOS hardened runtime enabled"],
   [universalMacTargets.has("dmg") && universalMacTargets.has("pkg") && universalMacTargets.has("zip"), "macOS universal DMG, PKG, and ZIP targets configured"],
+  [pkg.build?.mac?.extendInfo?.NSUserNotificationAlertStyle === "alert", "macOS notification alert actions enabled"],
   [pkg.build?.mac?.extendInfo?.NSCameraUsageDescription, "macOS camera permission usage text configured"],
   [pkg.build?.mac?.extendInfo?.NSMicrophoneUsageDescription, "macOS microphone permission usage text configured"],
   [pkg.build?.mac?.extendInfo?.NSAudioCaptureUsageDescription, "macOS system-audio capture usage text configured"],
