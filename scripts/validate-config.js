@@ -63,6 +63,7 @@ const assertions = [
   [webPreferencesSource.includes("shell.writeShortcutLink(shortcutPath, \"replace\""), "Windows notification shortcut repairs stale Electron target"],
   [webPreferencesSource.includes("legacyElectronShortcutPath") && webPreferencesSource.includes("fs.unlinkSync(legacyElectronShortcutPath)"), "legacy Electron notification identity is removed safely"],
   [webPreferencesSource.includes("app.setToastActivatorCLSID(WINDOWS_TOAST_ACTIVATOR_CLSID)"), "stable Windows toast activator configured before notifications"],
+  [webPreferencesSource.includes("runMacNotificationDiagnostic") && webPreferencesSource.includes("diagnostic.once(\"failed\"") && webPreferencesSource.includes("Test macOS Notification"), "macOS installed-app notification diagnostic configured"],
   [webPreferencesSource.includes("toastActivatorClsid: WINDOWS_TOAST_ACTIVATOR_CLSID"), "shortcut and Electron use the same toast activator"],
   [webPreferencesSource.includes('notification.once("show"') && !webPreferencesSource.includes("setTimeout(registerWindowsNotificationShortcut, 500)"), "active toast lifecycle does not rewrite Windows shortcuts"],
   [webPreferencesSource.includes("setAsDefaultProtocolClient(\"vitelglobal\", process.env.PORTABLE_EXECUTABLE_FILE || process.execPath)"), "Windows deep links target stable packaged launcher"],

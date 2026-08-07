@@ -516,6 +516,55 @@ function showMainWindow(reason = "user") {
   }
 }
 
+function runMacNotificationDiagnostic() {
+  if (process.platform !== "darwin") {
+    return dialog.showMessageBox(mainWindow, {
+      type: "info",
+      title: "Notification Test",
+      message: "This diagnostic is intended for macOS.",
+      detail: `Current platform: ${process.platform}`
+    });
+  }
+
+  if (!Notification.isSupported()) {
+    notificationLog("diagnostic-unsupported", { platform: process.platform });
+    return dialog.showMessageBox(mainWindow, {
+      type: "error",
+      title: "Notification Test Failed",
+      message: "macOS notifications are not supported for this application.",
+      detail: "Open VitelGlobal Desktop logs for diagnostic details."
+    });
+  }
+
+  const diagnostic = new Notification({
+    title: "VitelGlobal Notification Test",
+    body: "If you can see this alert, macOS Notification Center delivery is working.",
+    silent: false,
+    timeoutType: "default"
+  });
+  let completed = false;
+  const finish = (result, error = "") => {
+    if (completed) return;
+    completed = true;
+    notificationLog(`diagnostic-${result}`, { error });
+    const succeeded = result === "displayed";
+    void dialog.showMessageBox(mainWindow, {
+      type: succeeded ? "info" : "error",
+      title: succeeded ? "Notification Test Passed" : "Notification Test Failed",
+      message: succeeded
+        ? "macOS accepted the VitelGlobal notification."
+        : "macOS did not display the VitelGlobal notification.",
+      detail: succeeded
+        ? "Confirm the alert is visible in Notification Center, then continue with the incoming-call test."
+        : `${error || "No displayed event was received."}\n\nConfirm this app is Developer ID signed and Notifications are enabled in System Settings.`
+    });
+  };
+  diagnostic.once("show", () => finish("displayed"));
+  diagnostic.once("failed", (_event, error) => finish("failed", String(error || "Notification delivery failed.")));
+  diagnostic.show();
+  setTimeout(() => finish("timeout"), 8000);
+}
+
 function createMenu() {
   const template = [
     {
@@ -524,6 +573,7 @@ function createMenu() {
         { label: "About VitelGlobal Desktop", click: () => showAboutWindow() },
         { type: "separator" },
         { label: "Check for Updates", click: () => checkForUpdates() },
+        { label: "Test macOS Notification", click: () => runMacNotificationDiagnostic() },
         { label: "Open Logs", click: () => shell.showItemInFolder(log.transports.file.getFile().path) },
         { type: "separator" },
         { role: "quit" }

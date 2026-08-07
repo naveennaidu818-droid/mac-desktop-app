@@ -37,6 +37,10 @@ jobs:
           printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_path"
           test -s "$certificate_path"
           chmod 600 "$certificate_path"
+          if ! openssl pkcs12 -in "$certificate_path" -passin "pass:$CSC_KEY_PASSWORD" -info -noout >/dev/null 2>&1; then
+            echo "The MACOS_CERTIFICATE_P12_BASE64 secret is not a valid PKCS#12 file, or MACOS_CERTIFICATE_PASSWORD is incorrect." >&2
+            exit 1
+          fi
           echo "CSC_LINK=$certificate_path" >> "$GITHUB_ENV"
 
       - name: Restore notarization API key
@@ -55,6 +59,7 @@ jobs:
         run: |
           npm run lint
           npm run test:notifications
+          bash -n scripts/verify-macos-installed.sh
 
       - name: Build, sign, notarize, and verify
         run: npm run dist:mac:release
