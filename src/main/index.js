@@ -1,5 +1,6 @@
 "use strict";
 
+const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const { pathToFileURL } = require("node:url");
@@ -17,11 +18,21 @@ const {
   clipboard,
   globalShortcut,
   crashReporter,
-  desktopCapturer
+  desktopCapturer,
+  systemPreferences
 } = require("electron");
 const log = require("electron-log/main");
+const {
+  buildWindowsLaunchSpec,
+  createNotificationDeduper,
+  normalizeNotificationPayload,
+  notificationActionPayload,
+  shouldClearNotificationType
+} = require("./notificationPolicy");
 
 const APP_NAME = "VitelGlobal Desktop";
+const WINDOWS_APP_USER_MODEL_ID = "com.vitelglobal.desktop";
+const WINDOWS_TOAST_ACTIVATOR_CLSID = "{D7F34804-48E6-41EB-8EBA-57EEC402B21A}";
 const APP_URL = process.env.VITELGLOBAL_APP_URL || "https://desktop.officemeetings.net/";
 const HOME_ORIGIN = new URL(APP_URL).origin;
 const TRUSTED_HOST_SUFFIXES = [
@@ -35,13 +46,75 @@ let splashWindow;
 let tray;
 let isQuitting = false;
 let pendingDeepLink;
+let pendingNotificationClick = null;
+let backgroundNoticeShown = false;
+const activeNativeNotifications = new Set();
+const nativeNotificationDeduper = createNotificationDeduper({ windowMs: 2500 });
 let autoUpdater;
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 app.name = APP_NAME;
-app.setAppUserModelId("com.vitelglobal.desktop");
+app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
+if (process.platform === "win32") {
+  app.setToastActivatorCLSID(WINDOWS_TOAST_ACTIVATOR_CLSID);
+}
+
+function registerWindowsNotificationShortcut() {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const shortcutPath = path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "VitelGlobal Desktop.lnk");
+  const legacyElectronShortcutPath = path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "Electron.lnk");
+  // Portable Electron apps run from a temporary extraction directory. Using
+  // process.execPath there makes Windows label notifications as "Electron" and
+  // notification activation later opens the raw Electron welcome screen.
+  const launchSpec = buildWindowsLaunchSpec({
+    isPackaged: app.isPackaged,
+    execPath: process.execPath,
+    portableExecutableFile: process.env.PORTABLE_EXECUTABLE_FILE,
+    appPath: app.getAppPath(),
+    brandedIconPath: iconPath()
+  });
+  const shortcutOptions = {
+    target: launchSpec.target,
+    args: launchSpec.args,
+    cwd: launchSpec.cwd,
+    icon: launchSpec.icon,
+    iconIndex: 0,
+    appUserModelId: WINDOWS_APP_USER_MODEL_ID,
+    toastActivatorClsid: WINDOWS_TOAST_ACTIVATOR_CLSID,
+    description: "VitelGlobal Desktop enterprise communications shell"
+  };
+
+  try {
+    if (fs.existsSync(legacyElectronShortcutPath)) {
+      try {
+        const legacyShortcut = shell.readShortcutLink(legacyElectronShortcutPath);
+        if (path.resolve(legacyShortcut.target) === path.resolve(launchSpec.target)) {
+          fs.unlinkSync(legacyElectronShortcutPath);
+          log.info("Removed legacy Electron notification shortcut");
+        }
+      } catch (error) {
+        log.warn("Could not inspect legacy Electron notification shortcut", error);
+      }
+    }
+    shell.writeShortcutLink(shortcutPath, "replace", shortcutOptions)
+      || shell.writeShortcutLink(shortcutPath, "create", shortcutOptions);
+    log.info("Registered Windows notification shortcut", {
+      target: launchSpec.target,
+      args: launchSpec.args,
+      portable: Boolean(process.env.PORTABLE_EXECUTABLE_FILE)
+    });
+  } catch (err) {
+    log.error("Failed to register Start Menu shortcut for notifications:", err);
+  }
+}
+
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 app.commandLine.appendSwitch("enable-features", "WebRTCPipeWireCapturer");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
 
 log.initialize({ preload: true });
 log.transports.file.level = "info";
@@ -99,17 +172,129 @@ function send(channel, payload) {
   }
 }
 
-function showNativeNotification({ title = APP_NAME, body = "", silent = false } = {}) {
+function notificationLog(event, details = {}) {
+  log.info("[DesktopNotification]", { event, ...details });
+}
+
+function dispatchNotificationClick(payload) {
+  pendingNotificationClick = payload;
+  const restored = showMainWindow("notification-click");
+  notificationLog("window-restored", { restored, type: payload.type, screen: payload.screen });
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  const deliver = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send("notification-click", payload);
+    notificationLog("deep-link-dispatched", {
+      type: payload.type,
+      screen: payload.screen,
+      entityId: payload.data?.conversationId || payload.data?.peerNumber || payload.data?.callId
+        || payload.data?.meetingId || payload.data?.voicemailId || payload.data?.id || ""
+    });
+  };
+
+  if (mainWindow.webContents.isLoadingMainFrame()) {
+    mainWindow.webContents.once("did-finish-load", () => setTimeout(deliver, 250));
+  } else {
+    setTimeout(deliver, 100);
+  }
+}
+
+function showNativeNotification(payload = {}) {
   if (!Notification.isSupported()) {
+    notificationLog("unsupported", { type: payload.type || "general" });
     return false;
   }
 
-  const notification = new Notification({
-    title: String(title).slice(0, 120),
-    body: String(body).slice(0, 500),
-    icon: iconPath(),
-    silent
+  const normalized = normalizeNotificationPayload(payload);
+  if (normalized.type === "incoming-call" && normalized.entityId) {
+    const alreadyActive = [...activeNativeNotifications].some((item) => (
+      item.vitelNotificationType === "incoming-call"
+      && item.vitelNotificationEntityId === normalized.entityId
+    ));
+    if (alreadyActive) {
+      notificationLog("active-call-duplicate-suppressed", { type: normalized.type, entityId: normalized.entityId });
+      return false;
+    }
+  }
+  if (!nativeNotificationDeduper.shouldDeliver(normalized.dedupeKey)) {
+    notificationLog("duplicate-suppressed", { type: normalized.type, entityId: normalized.entityId });
+    return false;
+  }
+  notificationLog("received", { type: normalized.type, screen: normalized.screen, entityId: normalized.entityId });
+
+  let notifIcon;
+  try {
+    const iconImg = nativeImage.createFromPath(iconPath());
+    if (!iconImg.isEmpty()) notifIcon = iconImg;
+  } catch (err) {
+    log.warn("[DesktopNotification] Icon load failed", err);
+  }
+
+  const notificationOptions = {
+    title: normalized.title,
+    body: normalized.body,
+    icon: notifIcon,
+    silent: normalized.silent,
+    timeoutType: normalized.type === "incoming-call" ? "never" : "default"
+  };
+  if ((process.platform === "darwin" || process.platform === "win32") && normalized.type === "incoming-call") {
+    notificationOptions.actions = [
+      { type: "button", text: "Accept" },
+      { type: "button", text: "Reject" }
+    ];
+  }
+  if (process.platform === "darwin" && normalized.type === "incoming-call") {
+    notificationOptions.closeButtonText = "Reject";
+  }
+
+  const notification = new Notification(notificationOptions);
+  notification.vitelNotificationType = normalized.type;
+  notification.vitelNotificationEntityId = normalized.entityId;
+  activeNativeNotifications.add(notification);
+
+  if (process.platform === "darwin" && app.dock) {
+    try {
+      app.dock.bounce(normalized.type === "incoming-call" ? "critical" : "informational");
+    } catch (error) {
+      log.warn("[DesktopNotification] Dock bounce failed", error);
+    }
+  }
+
+  if (normalized.type === "incoming-call" && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isFocused()) {
+    mainWindow.flashFrame(true);
+    mainWindow.once("focus", () => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.flashFrame(false);
+    });
+  }
+
+  notification.on("click", () => {
+    try { notification.close(); } catch {}
+    activeNativeNotifications.delete(notification);
+    notificationLog("clicked", { type: normalized.type, screen: normalized.screen, action: "open" });
+    dispatchNotificationClick(notificationActionPayload(normalized, "open"));
   });
+
+  notification.on("action", (_event, index) => {
+    const action = index === 0 ? "accept" : "reject";
+    try { notification.close(); } catch {}
+    activeNativeNotifications.delete(notification);
+    notificationLog("clicked", { type: normalized.type, screen: normalized.screen, action });
+    dispatchNotificationClick(notificationActionPayload(normalized, action));
+  });
+
+  notification.once("show", () => {
+    notificationLog("displayed", { type: normalized.type, screen: normalized.screen, entityId: normalized.entityId });
+  });
+  notification.on("close", () => {
+    activeNativeNotifications.delete(notification);
+    notificationLog("closed", { type: normalized.type, entityId: normalized.entityId });
+  });
+  notification.on("failed", (_event, error) => {
+    activeNativeNotifications.delete(notification);
+    log.error("[DesktopNotification]", { event: "display-failed", type: normalized.type, error });
+  });
+
   notification.show();
   return true;
 }
@@ -132,6 +317,13 @@ function createSplashWindow() {
     }
   });
 
+  try {
+    const brandedIcon = nativeImage.createFromPath(iconPath());
+    if (!brandedIcon.isEmpty()) {
+      splashWindow.setIcon(brandedIcon);
+    }
+  } catch (e) {}
+
   splashWindow.loadFile(rendererPath("splash.html"));
   splashWindow.once("ready-to-show", () => splashWindow.show());
 }
@@ -153,19 +345,46 @@ function createMainWindow() {
       nodeIntegration: false,
       webSecurity: true,
       allowRunningInsecureContent: false,
-      spellcheck: true
+      spellcheck: true,
+      backgroundThrottling: false
     }
   });
+
+  try {
+    const brandedIcon = nativeImage.createFromPath(iconPath());
+    if (!brandedIcon.isEmpty()) {
+      mainWindow.setIcon(brandedIcon);
+    }
+  } catch (e) {
+    log.warn("[Main] Failed to set window icon:", e);
+  }
 
   mainWindow.on("close", (event) => {
     if (!isQuitting && process.env.VITELGLOBAL_CLOSE_TO_TRAY !== "false") {
       event.preventDefault();
       mainWindow.hide();
-      showNativeNotification({
-        title: APP_NAME,
-        body: "VitelGlobal Desktop is still running in the system tray.",
-        silent: true
-      });
+      if (!backgroundNoticeShown) {
+        backgroundNoticeShown = true;
+        showNativeNotification({
+          title: "VitelGlobal is running in the background",
+          body: "Calls and notifications remain active. Open VitelGlobal from the system tray to return.",
+          silent: true,
+          type: "general",
+          screen: "/notifications"
+        });
+      }
+    }
+  });
+
+  mainWindow.on("focus", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("window-activated");
+    }
+  });
+
+  mainWindow.on("restore", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("window-activated");
     }
   });
 
@@ -261,15 +480,40 @@ function createTray() {
   tray.on("click", () => showMainWindow());
 }
 
-function showMainWindow() {
-  if (!mainWindow) {
-    return;
+function showMainWindow(reason = "user") {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    notificationLog("window-restore-skipped", { reason, cause: "missing-window" });
+    return false;
   }
-  if (mainWindow.isMinimized()) {
-    mainWindow.restore();
+  try {
+    if (process.platform === "darwin" && app.dock) {
+      try {
+        app.dock.show();
+      } catch (e) {}
+    }
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
+
+    if (process.platform === "darwin") {
+      try {
+        if (app.focus) {
+          app.focus({ steal: true });
+        }
+      } catch (e) {}
+    } else {
+      mainWindow.setAlwaysOnTop(true);
+      mainWindow.focus();
+      mainWindow.setAlwaysOnTop(false);
+    }
+    notificationLog("window-restored", { reason, visible: mainWindow.isVisible() });
+    return true;
+  } catch (err) {
+    log.warn("[Main] Error showing main window:", err);
+    return false;
   }
-  mainWindow.show();
-  mainWindow.focus();
 }
 
 function createMenu() {
@@ -411,8 +655,6 @@ function configureSession() {
   const defaultSession = session.defaultSession;
 
   defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
-    const origin = details.requestingUrl || webContents.getURL();
-    const trusted = isTrustedUrl(origin);
     const permitted = new Set([
       "media",
       "microphone",
@@ -424,12 +666,12 @@ function configureSession() {
       "clipboard-read"
     ]);
 
-    log.info("Permission request", { permission, origin, trusted });
-    callback(Boolean(trusted && permitted.has(permission)));
+    log.info("Permission request auto-granted:", { permission, requestingUrl: details?.requestingUrl });
+    callback(permitted.has(permission));
   });
 
-  defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
-    return Boolean(isTrustedUrl(requestingOrigin) && ["media", "microphone", "camera", "display-capture", "notifications"].includes(permission));
+  defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    return ["media", "microphone", "camera", "display-capture", "notifications", "fullscreen", "clipboard-sanitized-write", "clipboard-read"].includes(permission);
   });
 
   if (typeof defaultSession.setDisplayMediaRequestHandler === "function") {
@@ -502,6 +744,35 @@ function registerIpc() {
   ipcMain.handle("app:read-clipboard", () => clipboard.readText());
   ipcMain.handle("app:write-clipboard", (_event, text) => clipboard.writeText(String(text ?? "")));
   ipcMain.handle("app:notify", (_event, payload) => showNativeNotification(payload));
+  ipcMain.handle("app:clear-notifications", (_event, type) => {
+    const requestedType = String(type || "").trim().toLowerCase();
+    let cleared = 0;
+    for (const notification of [...activeNativeNotifications]) {
+      const notificationType = String(notification.vitelNotificationType || "").trim().toLowerCase();
+      if (!shouldClearNotificationType(notificationType, requestedType)) continue;
+      try {
+        notification.close();
+        cleared += 1;
+      } catch (err) {}
+      activeNativeNotifications.delete(notification);
+    }
+    if (requestedType === "incoming-call" && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.flashFrame(false);
+    }
+    notificationLog("clear-request", { requestedType: requestedType || "all", cleared, remaining: activeNativeNotifications.size });
+    return cleared;
+  });
+  ipcMain.handle("app:focus", () => showMainWindow());
+  ipcMain.handle("app:flash-frame", (_event, enabled) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.flashFrame(Boolean(enabled));
+    }
+  });
+  ipcMain.handle("app:get-pending-notification-click", () => {
+    const temp = pendingNotificationClick;
+    pendingNotificationClick = null;
+    return temp;
+  });
   ipcMain.handle("app:check-for-updates", () => checkForUpdates());
   ipcMain.handle("app:get-auto-launch", () => app.getLoginItemSettings().openAtLogin);
   ipcMain.handle("app:set-auto-launch", (_event, enabled) => {
@@ -561,7 +832,39 @@ app.whenReady().then(async () => {
     return;
   }
 
-  app.setAsDefaultProtocolClient("vitelglobal");
+  registerWindowsNotificationShortcut();
+
+  // Pre-request macOS System Media Permissions once at startup
+  if (process.platform === "darwin" && systemPreferences) {
+    try {
+      if (typeof systemPreferences.getMediaAccessStatus === "function" && typeof systemPreferences.askForMediaAccess === "function") {
+        const micStatus = systemPreferences.getMediaAccessStatus("microphone");
+        if (micStatus === "not-determined") {
+          await systemPreferences.askForMediaAccess("microphone");
+        }
+        const camStatus = systemPreferences.getMediaAccessStatus("camera");
+        if (camStatus === "not-determined") {
+          await systemPreferences.askForMediaAccess("camera");
+        }
+      }
+    } catch (e) {
+      log.warn("Error requesting macOS media access:", e);
+    }
+  }
+
+  if (process.platform === "win32" && app.isPackaged) {
+    app.setAsDefaultProtocolClient("vitelglobal", process.env.PORTABLE_EXECUTABLE_FILE || process.execPath);
+  } else if (process.platform === "win32") {
+    const launchSpec = buildWindowsLaunchSpec({
+      isPackaged: false,
+      execPath: process.execPath,
+      appPath: app.getAppPath(),
+      brandedIconPath: iconPath()
+    });
+    app.setAsDefaultProtocolClient("vitelglobal", launchSpec.target, launchSpec.protocolArgs);
+  } else {
+    app.setAsDefaultProtocolClient("vitelglobal");
+  }
   configureSession();
   registerIpc();
   configureAutoUpdater();

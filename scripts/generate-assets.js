@@ -8,7 +8,7 @@ const pngToIco = pngToIcoModule.default || pngToIcoModule;
 
 const root = path.join(__dirname, "..");
 const iconsDir = path.join(root, "build", "icons");
-const sourceLogo = path.join(iconsDir, "vitelglobal-logo.svg");
+const sourceLogo = path.join(iconsDir, "vitel-v-icon.svg");
 const pngSizes = [16, 24, 32, 48, 64, 128, 256, 512, 1024];
 
 function writeUInt32BE(value) {
@@ -55,22 +55,8 @@ async function main() {
   await fs.mkdir(iconsDir, { recursive: true });
   const logo = await fs.readFile(sourceLogo);
 
-  const base = sharp({
-    create: {
-      width: 1024,
-      height: 1024,
-      channels: 4,
-      background: "#f6f8ff"
-    }
-  });
-
-  const resizedLogo = await sharp(logo, { density: 192 })
-    .resize({ width: 820, height: 280, fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-    .png()
-    .toBuffer();
-
-  const icon = await base
-    .composite([{ input: resizedLogo, gravity: "center" }])
+  const icon = await sharp(logo, { density: 300 })
+    .resize(1024, 1024)
     .png()
     .toBuffer();
 
