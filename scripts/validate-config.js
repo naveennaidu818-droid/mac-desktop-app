@@ -23,6 +23,7 @@ for (const relativePath of required) {
 
 const pkg = require(path.join(root, "package.json"));
 const webPreferencesSource = fs.readFileSync(path.join(root, "src/main/index.js"), "utf8");
+const preloadSource = fs.readFileSync(path.join(root, "src/preload/index.js"), "utf8");
 const assetGeneratorSource = fs.readFileSync(path.join(root, "scripts/generate-assets.js"), "utf8");
 const macEntitlements = fs.readFileSync(path.join(root, "build", "entitlements.mac.plist"), "utf8");
 const macTargets = pkg.build?.mac?.target || [];
@@ -49,6 +50,9 @@ const assertions = [
   [webPreferencesSource.includes("certificate-error"), "certificate error handler configured"],
   [webPreferencesSource.includes('require("./notificationPolicy")'), "central native notification policy loaded"],
   [webPreferencesSource.includes("nativeNotificationDeduper.shouldDeliver"), "native notification deduplication configured"],
+  [preloadSource.includes("vitelglobal:clear-call-toasts") && preloadSource.includes('invoke("app:clear-notifications", "incoming-call")'), "preload forwards terminal call cleanup directly to Electron"],
+  [preloadSource.includes('restore: () => invoke("app:focus")'), "preload exposes explicit existing-window restore API"],
+  [webPreferencesSource.includes("backgroundNoticeShown") && webPreferencesSource.includes("Calls and notifications remain active"), "close-to-tray background notice configured once per session"],
   [webPreferencesSource.includes("isLoadingMainFrame()") && webPreferencesSource.includes('once("did-finish-load"'), "notification click waits for renderer readiness"],
   [webPreferencesSource.includes('notification.on("action"'), "native incoming-call action routing configured"],
   [webPreferencesSource.includes('[DesktopNotification]'), "structured native notification logging configured"],
@@ -57,9 +61,10 @@ const assertions = [
   [webPreferencesSource.includes("args: launchSpec.args"), "development toast activation includes application arguments"],
   [webPreferencesSource.includes("icon: launchSpec.icon"), "development toast activation uses branded icon"],
   [webPreferencesSource.includes("shell.writeShortcutLink(shortcutPath, \"replace\""), "Windows notification shortcut repairs stale Electron target"],
+  [webPreferencesSource.includes("legacyElectronShortcutPath") && webPreferencesSource.includes("fs.unlinkSync(legacyElectronShortcutPath)"), "legacy Electron notification identity is removed safely"],
   [webPreferencesSource.includes("app.setToastActivatorCLSID(WINDOWS_TOAST_ACTIVATOR_CLSID)"), "stable Windows toast activator configured before notifications"],
   [webPreferencesSource.includes("toastActivatorClsid: WINDOWS_TOAST_ACTIVATOR_CLSID"), "shortcut and Electron use the same toast activator"],
-  [webPreferencesSource.includes('notification.once("show"') && webPreferencesSource.includes("setTimeout(registerWindowsNotificationShortcut, 500)"), "Windows shortcut repaired after asynchronous native toast registration"],
+  [webPreferencesSource.includes('notification.once("show"') && !webPreferencesSource.includes("setTimeout(registerWindowsNotificationShortcut, 500)"), "active toast lifecycle does not rewrite Windows shortcuts"],
   [webPreferencesSource.includes("setAsDefaultProtocolClient(\"vitelglobal\", process.env.PORTABLE_EXECUTABLE_FILE || process.execPath)"), "Windows deep links target stable packaged launcher"],
   [pkg.build?.mac?.minimumSystemVersion === "12.0.0", "macOS minimum version is Monterey (12.0)"],
   [pkg.build?.mac?.hardenedRuntime === true, "macOS hardened runtime enabled"],

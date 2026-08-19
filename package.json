@@ -1,6 +1,6 @@
 {
   "name": "vitelglobal-desktop",
-  "version": "1.0.1",
+  "version": "1.0.9",
   "description": "Enterprise Electron desktop shell for VitelGlobal Office Meetings.",
   "author": "VitelGlobal",
   "homepage": "https://www.vitelglobal.com/",
@@ -10,6 +10,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
+    "start:local-recovered": "node scripts/start-local-recovered.js",
     "lint": "node scripts/validate-config.js",
     "test:notifications": "node scripts/test-notifications.js",
     "assets": "node scripts/generate-assets.js",
@@ -37,7 +38,7 @@
   "build": {
     "appId": "com.vitelglobal.desktop",
     "productName": "VitelGlobal Desktop",
-    "copyright": "Copyright © 2026 VitelGlobal",
+    "copyright": "Copyright ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â© 2026 VitelGlobal",
     "asar": true,
     "directories": {
       "buildResources": "build",

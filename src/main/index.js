@@ -1,5 +1,6 @@
 "use strict";
 
+const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const { pathToFileURL } = require("node:url");
@@ -25,7 +26,9 @@ const {
   buildWindowsLaunchSpec,
   createNotificationDeduper,
   normalizeNotificationPayload,
-  notificationActionPayload
+  notificationActionPayload,
+  resolveNotificationAction,
+  shouldClearNotificationType
 } = require("./notificationPolicy");
 
 const APP_NAME = "VitelGlobal Desktop";
@@ -45,6 +48,7 @@ let tray;
 let isQuitting = false;
 let pendingDeepLink;
 let pendingNotificationClick = null;
+let backgroundNoticeShown = false;
 const activeNativeNotifications = new Set();
 const nativeNotificationDeduper = createNotificationDeduper({ windowMs: 2500 });
 let autoUpdater;
@@ -61,10 +65,8 @@ function registerWindowsNotificationShortcut() {
     return;
   }
 
-  const shortcutPaths = [
-    path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "VitelGlobal Desktop.lnk"),
-    path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "Electron.lnk")
-  ];
+  const shortcutPath = path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "VitelGlobal Desktop.lnk");
+  const legacyElectronShortcutPath = path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "Electron.lnk");
   // Portable Electron apps run from a temporary extraction directory. Using
   // process.execPath there makes Windows label notifications as "Electron" and
   // notification activation later opens the raw Electron welcome screen.
@@ -87,10 +89,19 @@ function registerWindowsNotificationShortcut() {
   };
 
   try {
-    for (const shortcutPath of shortcutPaths) {
-      shell.writeShortcutLink(shortcutPath, "replace", shortcutOptions)
-        || shell.writeShortcutLink(shortcutPath, "create", shortcutOptions);
+    if (fs.existsSync(legacyElectronShortcutPath)) {
+      try {
+        const legacyShortcut = shell.readShortcutLink(legacyElectronShortcutPath);
+        if (path.resolve(legacyShortcut.target) === path.resolve(launchSpec.target)) {
+          fs.unlinkSync(legacyElectronShortcutPath);
+          log.info("Removed legacy Electron notification shortcut");
+        }
+      } catch (error) {
+        log.warn("Could not inspect legacy Electron notification shortcut", error);
+      }
     }
+    shell.writeShortcutLink(shortcutPath, "replace", shortcutOptions)
+      || shell.writeShortcutLink(shortcutPath, "create", shortcutOptions);
     log.info("Registered Windows notification shortcut", {
       target: launchSpec.target,
       args: launchSpec.args,
@@ -197,6 +208,16 @@ function showNativeNotification(payload = {}) {
   }
 
   const normalized = normalizeNotificationPayload(payload);
+  if (normalized.type === "incoming-call" && normalized.entityId) {
+    const alreadyActive = [...activeNativeNotifications].some((item) => (
+      item.vitelNotificationType === "incoming-call"
+      && item.vitelNotificationEntityId === normalized.entityId
+    ));
+    if (alreadyActive) {
+      notificationLog("active-call-duplicate-suppressed", { type: normalized.type, entityId: normalized.entityId });
+      return false;
+    }
+  }
   if (!nativeNotificationDeduper.shouldDeliver(normalized.dedupeKey)) {
     notificationLog("duplicate-suppressed", { type: normalized.type, entityId: normalized.entityId });
     return false;
@@ -229,6 +250,8 @@ function showNativeNotification(payload = {}) {
   }
 
   const notification = new Notification(notificationOptions);
+  notification.vitelNotificationType = normalized.type;
+  notification.vitelNotificationEntityId = normalized.entityId;
   activeNativeNotifications.add(notification);
 
   if (process.platform === "darwin" && app.dock) {
@@ -247,13 +270,15 @@ function showNativeNotification(payload = {}) {
   }
 
   notification.on("click", () => {
+    try { notification.close(); } catch {}
     activeNativeNotifications.delete(notification);
     notificationLog("clicked", { type: normalized.type, screen: normalized.screen, action: "open" });
     dispatchNotificationClick(notificationActionPayload(normalized, "open"));
   });
 
-  notification.on("action", (_event, index) => {
-    const action = index === 0 ? "accept" : "reject";
+  notification.on("action", (details, legacyActionIndex) => {
+    const action = resolveNotificationAction(details, legacyActionIndex);
+    try { notification.close(); } catch {}
     activeNativeNotifications.delete(notification);
     notificationLog("clicked", { type: normalized.type, screen: normalized.screen, action });
     dispatchNotificationClick(notificationActionPayload(normalized, action));
@@ -261,8 +286,6 @@ function showNativeNotification(payload = {}) {
 
   notification.once("show", () => {
     notificationLog("displayed", { type: normalized.type, screen: normalized.screen, entityId: normalized.entityId });
-    registerWindowsNotificationShortcut();
-    setTimeout(registerWindowsNotificationShortcut, 500);
   });
   notification.on("close", () => {
     activeNativeNotifications.delete(notification);
@@ -274,7 +297,6 @@ function showNativeNotification(payload = {}) {
   });
 
   notification.show();
-  registerWindowsNotificationShortcut();
   return true;
 }
 
@@ -342,11 +364,16 @@ function createMainWindow() {
     if (!isQuitting && process.env.VITELGLOBAL_CLOSE_TO_TRAY !== "false") {
       event.preventDefault();
       mainWindow.hide();
-      showNativeNotification({
-        title: APP_NAME,
-        body: "VitelGlobal Desktop is still running in the system tray.",
-        silent: true
-      });
+      if (!backgroundNoticeShown) {
+        backgroundNoticeShown = true;
+        showNativeNotification({
+          title: "VitelGlobal is running in the background",
+          body: "Calls and notifications remain active. Open VitelGlobal from the system tray to return.",
+          silent: true,
+          type: "general",
+          screen: "/notifications"
+        });
+      }
     }
   });
 
@@ -719,13 +746,22 @@ function registerIpc() {
   ipcMain.handle("app:write-clipboard", (_event, text) => clipboard.writeText(String(text ?? "")));
   ipcMain.handle("app:notify", (_event, payload) => showNativeNotification(payload));
   ipcMain.handle("app:clear-notifications", (_event, type) => {
-    for (const notification of activeNativeNotifications) {
+    const requestedType = String(type || "").trim().toLowerCase();
+    let cleared = 0;
+    for (const notification of [...activeNativeNotifications]) {
+      const notificationType = String(notification.vitelNotificationType || "").trim().toLowerCase();
+      if (!shouldClearNotificationType(notificationType, requestedType)) continue;
       try {
         notification.close();
+        cleared += 1;
       } catch (err) {}
+      activeNativeNotifications.delete(notification);
     }
-    activeNativeNotifications.clear();
-    return true;
+    if (requestedType === "incoming-call" && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.flashFrame(false);
+    }
+    notificationLog("clear-request", { requestedType: requestedType || "all", cleared, remaining: activeNativeNotifications.size });
+    return cleared;
   });
   ipcMain.handle("app:focus", () => showMainWindow());
   ipcMain.handle("app:flash-frame", (_event, enabled) => {

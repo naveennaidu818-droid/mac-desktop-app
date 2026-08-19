@@ -18,6 +18,7 @@ const DEFAULT_SCREENS = Object.freeze({
   "missed-call": "/calls",
   sms: "/sms",
   chat: "/chat",
+  whatsapp: "/whatsapp",
   meeting: "/meetings",
   voicemail: "/voicemails",
   "contact-sync": "/contact-sync",
@@ -36,6 +37,12 @@ function safeScreen(value, type) {
   return DEFAULT_SCREENS[type] || DEFAULT_SCREENS.general;
 }
 
+function sanitizeNotificationTitle(value) {
+  return String(value || "VitelGlobal Desktop")
+    .replace(/^\?\?\s+(?=New (?:SMS|MMS)\b)/i, "")
+    .slice(0, 120);
+}
+
 function normalizeNotificationPayload(payload = {}) {
   const type = canonicalNotificationType(payload.type);
   const data = payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)
@@ -45,19 +52,19 @@ function normalizeNotificationPayload(payload = {}) {
     if (data[key] == null && payload[key] != null) data[key] = payload[key];
   }
   const screen = safeScreen(payload.screen || data.screen, type);
-  const entityId = data.conversationId || data.peerNumber || data.callId || data.meetingId
+  const entityId = data.conversationId || data.peerNumber || data.callId || data.callerNumber || data.meetingId
     || data.voicemailId || data.contactId || data.id || payload.conversationId || "";
   const sourceId = payload.id || data.notificationId || data.messageId || entityId;
 
   return {
-    title: String(payload.title || "VitelGlobal Desktop").slice(0, 120),
+    title: sanitizeNotificationTitle(payload.title),
     body: String(payload.body || "").slice(0, 500),
     silent: Boolean(payload.silent),
     type,
     screen,
     data,
     entityId: String(entityId || ""),
-    dedupeKey: [type, String(sourceId || ""), String(payload.title || ""), String(payload.body || "")].join("|")
+    dedupeKey: [type, String(sourceId || ""), sanitizeNotificationTitle(payload.title), String(payload.body || "")].join("|")
   };
 }
 
@@ -95,6 +102,11 @@ function buildWindowsLaunchSpec({ isPackaged, execPath, portableExecutableFile, 
   };
 }
 
+function shouldClearNotificationType(notificationType, requestedType) {
+  const requested = String(requestedType || "").trim();
+  if (!requested) return true;
+  return canonicalNotificationType(notificationType) === canonicalNotificationType(requested);
+}
 function notificationActionPayload(notification, action) {
   const normalizedAction = action === "accept" ? "accept" : action === "reject" ? "reject" : "open";
   return {
@@ -109,11 +121,21 @@ function notificationActionPayload(notification, action) {
   };
 }
 
+function resolveNotificationAction(details, legacyActionIndex) {
+  const index = Number.isInteger(details?.actionIndex)
+    ? details.actionIndex
+    : Number(legacyActionIndex);
+  return index === 0 ? "accept" : index === 1 ? "reject" : "open";
+}
+
 module.exports = {
   DEFAULT_SCREENS,
   buildWindowsLaunchSpec,
   canonicalNotificationType,
   createNotificationDeduper,
   normalizeNotificationPayload,
-  notificationActionPayload
+  notificationActionPayload,
+  resolveNotificationAction,
+  sanitizeNotificationTitle,
+  shouldClearNotificationType
 };

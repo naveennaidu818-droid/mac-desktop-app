@@ -3,6 +3,17 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
+
+const clearIncomingCallNotification = () => {
+  void invoke("app:clear-notifications", "incoming-call").catch(() => {});
+};
+
+for (const eventName of [
+  "vitelglobal:clear-call-toasts",
+  "vitelglobal:clear-active-call-notification"
+]) {
+  window.addEventListener(eventName, clearIncomingCallNotification);
+}
 const on = (channel, callback) => {
   if (typeof callback !== "function") {
     return () => {};
@@ -24,6 +35,7 @@ contextBridge.exposeInMainWorld("vitelDesktop", {
   notify: (payload) => invoke("app:notify", payload),
   clearNotifications: (type) => invoke("app:clear-notifications", type),
   focus: () => invoke("app:focus"),
+  restore: () => invoke("app:focus"),
   flashFrame: (enabled) => invoke("app:flash-frame", enabled),
   checkForUpdates: () => invoke("app:check-for-updates"),
   getAutoLaunch: () => invoke("app:get-auto-launch"),

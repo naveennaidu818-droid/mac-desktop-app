@@ -6,7 +6,10 @@ const {
   canonicalNotificationType,
   createNotificationDeduper,
   normalizeNotificationPayload,
-  notificationActionPayload
+  notificationActionPayload,
+  resolveNotificationAction,
+  sanitizeNotificationTitle,
+  shouldClearNotificationType
 } = require("../src/main/notificationPolicy");
 
 let checks = 0;
@@ -30,6 +33,7 @@ const routingCases = [
   ["missed-call", "missed-call", "/calls"],
   ["sms", "sms", "/sms"],
   ["chat", "chat", "/chat"],
+  ["whatsapp", "whatsapp", "/whatsapp"],
   ["message", "chat", "/chat"],
   ["new-message", "chat", "/chat"],
   ["mention", "chat", "/chat"],
@@ -76,6 +80,7 @@ ok(sms.dedupeKey.startsWith("sms|sms-10|"), "SMS stable duplicate key");
 
 const entityCases = [
   ["incoming-call", { callId: "call-8" }, "call-8"],
+  ["whatsapp", { conversationId: "wa-12" }, "wa-12"],
   ["meeting", { meetingId: "meeting-9" }, "meeting-9"],
   ["voicemail", { voicemailId: "vm-10" }, "vm-10"],
   ["contact-sync", { contactId: "contact-11" }, "contact-11"]
@@ -102,7 +107,15 @@ deepEqual(notificationActionPayload(call, "accept"), {
   }
 }, "incoming call accept action");
 equal(notificationActionPayload(call, "reject").data.rejectImmediately, true, "incoming call reject action");
+equal(sanitizeNotificationTitle("?? New SMS from Main Board"), "New SMS from Main Board", "malformed SMS title prefix removed");
+equal(sanitizeNotificationTitle("Incoming Audio Call"), "Incoming Audio Call", "valid notification title preserved");
+equal(normalizeNotificationPayload({ type: "incoming-call", data: { callerNumber: "19085550100" } }).entityId, "19085550100", "incoming caller number is a stable fallback identity");
 equal(notificationActionPayload(call, "anything").data.notificationAction, "open", "unknown action becomes open");
+equal(resolveNotificationAction({ actionIndex: 0 }, undefined), "accept", "Electron 43 action details accept index");
+equal(resolveNotificationAction({ actionIndex: 1 }, undefined), "reject", "Electron 43 action details reject index");
+equal(resolveNotificationAction({}, 0), "accept", "legacy Electron accept index fallback");
+equal(resolveNotificationAction({}, 1), "reject", "legacy Electron reject index fallback");
+equal(resolveNotificationAction({}, undefined), "open", "missing native action index opens application safely");
 
 let clock = 1000;
 const deduper = createNotificationDeduper({ windowMs: 2500, now: () => clock });
@@ -115,6 +128,11 @@ equal(deduper.shouldDeliver("sms-1"), true, "same notification allowed after win
 equal(deduper.size(), 1, "expired dedupe keys pruned");
 equal(deduper.shouldDeliver(""), true, "missing key never suppresses delivery");
 
+equal(shouldClearNotificationType("incoming-call", "incoming-call"), true, "incoming call cleanup matches incoming toast");
+equal(shouldClearNotificationType("ringing", "incoming-call"), true, "ringing alias cleanup matches incoming toast");
+equal(shouldClearNotificationType("missed-call", "incoming-call"), false, "incoming cleanup preserves missed-call toast");
+equal(shouldClearNotificationType("sms", "incoming-call"), false, "incoming cleanup preserves SMS toast");
+equal(shouldClearNotificationType("voicemail", ""), true, "empty cleanup type clears all notifications");
 const developmentLaunch = buildWindowsLaunchSpec({
   isPackaged: false,
   execPath: "C:\\project\\node_modules\\electron\\dist\\electron.exe",
