@@ -18,9 +18,9 @@
     "dist": "npm run assets && electron-builder",
     "dist:win": "npm run assets && electron-builder --win nsis portable --config.directories.output=dist/windows",
     "dist:mac": "npm run dist:mac:release",
-    "dist:mac:release": "node scripts/require-macos-release.js && npm run assets && electron-builder --mac dmg pkg zip --arm64 --x64 --config.directories.output=dist/macos && npm run verify:mac:release -- dist/macos",
-    "dist:mac:test": "npm run assets && electron-builder --mac dmg zip --arm64 --x64 --config.directories.output=dist/macos-test --config.mac.hardenedRuntime=false --publish never",
-    "pack:mac": "npm run assets && electron-builder --mac --dir --arm64 --x64 --config.directories.output=dist/macos-unpacked",
+    "dist:mac:release": "node scripts/require-macos-release.js && npm run assets && electron-builder --mac dmg pkg zip --universal --arm64 --x64 --config.directories.output=dist/macos && npm run verify:mac:release -- dist/macos",
+    "dist:mac:test": "npm run assets && electron-builder --mac dmg zip --universal --arm64 --x64 --config.directories.output=dist/macos-test --config.mac.hardenedRuntime=false --publish never",
+    "pack:mac": "npm run assets && electron-builder --mac --dir --universal --arm64 --x64 --config.directories.output=dist/macos-unpacked",
     "verify:mac:release": "node scripts/verify-macos-release.js",
     "dist:linux": "npm run assets && electron-builder --linux AppImage deb rpm --config.directories.output=dist/linux",
     "postinstall": "electron-builder install-app-deps"
@@ -109,6 +109,7 @@
         {
           "target": "dmg",
           "arch": [
+            "universal",
             "arm64",
             "x64"
           ]
@@ -116,6 +117,7 @@
         {
           "target": "pkg",
           "arch": [
+            "universal",
             "arm64",
             "x64"
           ]
@@ -123,6 +125,7 @@
         {
           "target": "zip",
           "arch": [
+            "universal",
             "arm64",
             "x64"
           ]
