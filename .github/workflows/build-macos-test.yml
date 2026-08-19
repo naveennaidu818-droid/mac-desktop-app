@@ -37,11 +37,16 @@ jobs:
       - name: Build macOS installers
         run: npm run dist:mac:test
 
-      - name: Upload macOS installers
+      - name: Upload Apple Silicon macOS DMG installer (~110MB)
         uses: actions/upload-artifact@v4
         with:
-          name: vitelglobal-desktop-macos-installers
+          name: vitelglobal-desktop-macos-arm64-dmg
           if-no-files-found: error
-          path: |
-            dist/macos-test/*.dmg
-            dist/macos-test/*.zip
+          path: dist/macos-test/*arm64*.dmg
+
+      - name: Upload Intel macOS DMG installer (~110MB)
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitelglobal-desktop-macos-x64-dmg
+          if-no-files-found: error
+          path: dist/macos-test/*x64*.dmg
