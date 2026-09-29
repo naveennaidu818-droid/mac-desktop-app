@@ -37,10 +37,10 @@ function safeScreen(value, type) {
   return DEFAULT_SCREENS[type] || DEFAULT_SCREENS.general;
 }
 
-function sanitizeNotificationTitle(value) {
-  return String(value || "VitelGlobal Desktop")
-    .replace(/^\?\?\s+(?=New (?:SMS|MMS)\b)/i, "")
-    .slice(0, 120);
+function sanitizeNotificationTitle(title = "") {
+  const str = String(title || "");
+  const cleaned = str.replace(/^[\?\s\uFFFD\u200B-\u200D\uFEFF]+/, "").trim();
+  return cleaned || "VitelGlobal Desktop";
 }
 
 function normalizeNotificationPayload(payload = {}) {
@@ -48,23 +48,23 @@ function normalizeNotificationPayload(payload = {}) {
   const data = payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)
     ? { ...payload.data }
     : {};
-  for (const key of ["conversationId", "peerNumber", "callId", "meetingId", "voicemailId", "contactId", "messageId", "id"]) {
+  for (const key of ["conversationId", "peerNumber", "callId", "meetingId", "voicemailId", "contactId", "callerNumber", "messageId", "id"]) {
     if (data[key] == null && payload[key] != null) data[key] = payload[key];
   }
   const screen = safeScreen(payload.screen || data.screen, type);
-  const entityId = data.conversationId || data.peerNumber || data.callId || data.callerNumber || data.meetingId
-    || data.voicemailId || data.contactId || data.id || payload.conversationId || "";
+  const entityId = data.conversationId || data.peerNumber || data.callId || data.meetingId
+    || data.voicemailId || data.contactId || data.callerNumber || data.id || payload.conversationId || "";
   const sourceId = payload.id || data.notificationId || data.messageId || entityId;
 
   return {
-    title: sanitizeNotificationTitle(payload.title),
+    title: sanitizeNotificationTitle(payload.title || "VitelGlobal Desktop").slice(0, 120),
     body: String(payload.body || "").slice(0, 500),
     silent: Boolean(payload.silent),
     type,
     screen,
     data,
     entityId: String(entityId || ""),
-    dedupeKey: [type, String(sourceId || ""), sanitizeNotificationTitle(payload.title), String(payload.body || "")].join("|")
+    dedupeKey: [type, String(sourceId || ""), String(payload.title || ""), String(payload.body || "")].join("|")
   };
 }
 
@@ -102,30 +102,41 @@ function buildWindowsLaunchSpec({ isPackaged, execPath, portableExecutableFile, 
   };
 }
 
-function shouldClearNotificationType(notificationType, requestedType) {
-  const requested = String(requestedType || "").trim();
-  if (!requested) return true;
-  return canonicalNotificationType(notificationType) === canonicalNotificationType(requested);
-}
 function notificationActionPayload(notification, action) {
-  const normalizedAction = action === "accept" ? "accept" : action === "reject" ? "reject" : "open";
+  const normalizedAction =
+    action === "accept" || action === "answer"
+      ? "accept"
+      : action === "reject" || action === "decline"
+        ? "reject"
+        : action === "close" || action === "dismiss" || action === "silence"
+          ? "close"
+          : "open";
+  const data = {
+    ...notification.data,
+    notificationAction: normalizedAction,
+    answerImmediately: normalizedAction === "accept",
+    rejectImmediately: normalizedAction === "reject"
+  };
+  if (normalizedAction === "close") {
+    data.silenceImmediately = true;
+  }
   return {
     type: notification.type,
     screen: notification.screen,
-    data: {
-      ...notification.data,
-      notificationAction: normalizedAction,
-      answerImmediately: normalizedAction === "accept",
-      rejectImmediately: normalizedAction === "reject"
-    }
+    data
   };
 }
 
-function resolveNotificationAction(details, legacyActionIndex) {
+function resolveNotificationAction(details, legacyIndex) {
   const index = Number.isInteger(details?.actionIndex)
     ? details.actionIndex
-    : Number(legacyActionIndex);
+    : (Number.isInteger(legacyIndex) ? legacyIndex : (Number.isInteger(details) ? details : -1));
   return index === 0 ? "accept" : index === 1 ? "reject" : "open";
+}
+
+function shouldClearNotificationType(activeType, targetType) {
+  if (!targetType) return true;
+  return canonicalNotificationType(activeType) === canonicalNotificationType(targetType);
 }
 
 module.exports = {

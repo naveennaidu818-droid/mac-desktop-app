@@ -1,6 +1,5 @@
 "use strict";
 
-const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const { pathToFileURL } = require("node:url");
@@ -22,13 +21,12 @@ const {
   systemPreferences
 } = require("electron");
 const log = require("electron-log/main");
+const sqliteDb = require("./database");
 const {
   buildWindowsLaunchSpec,
   createNotificationDeduper,
   normalizeNotificationPayload,
-  notificationActionPayload,
-  resolveNotificationAction,
-  shouldClearNotificationType
+  notificationActionPayload
 } = require("./notificationPolicy");
 
 const APP_NAME = "VitelGlobal Desktop";
@@ -48,9 +46,18 @@ let tray;
 let isQuitting = false;
 let pendingDeepLink;
 let pendingNotificationClick = null;
-let backgroundNoticeShown = false;
 const activeNativeNotifications = new Set();
 const nativeNotificationDeduper = createNotificationDeduper({ windowMs: 2500 });
+let activeDockBounceId = null;
+
+function stopDockBounce() {
+  if (process.platform === "darwin" && app.dock && activeDockBounceId !== null) {
+    try {
+      app.dock.cancelBounce(activeDockBounceId);
+    } catch (e) {}
+    activeDockBounceId = null;
+  }
+}
 let autoUpdater;
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -60,13 +67,30 @@ if (process.platform === "win32") {
   app.setToastActivatorCLSID(WINDOWS_TOAST_ACTIVATOR_CLSID);
 }
 
+let backgroundNoticeShown = false;
+
 function registerWindowsNotificationShortcut() {
   if (process.platform !== "win32") {
     return;
   }
 
-  const shortcutPath = path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "VitelGlobal Desktop.lnk");
-  const legacyElectronShortcutPath = path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "Electron.lnk");
+  const legacyElectronShortcutPath = path.join(
+    app.getPath("appData"),
+    "Microsoft",
+    "Windows",
+    "Start Menu",
+    "Programs",
+    "Electron.lnk"
+  );
+  try {
+    if (fs.existsSync(legacyElectronShortcutPath)) {
+      fs.unlinkSync(legacyElectronShortcutPath);
+    }
+  } catch (e) {}
+
+  const shortcutPaths = [
+    path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "VitelGlobal Desktop.lnk")
+  ];
   // Portable Electron apps run from a temporary extraction directory. Using
   // process.execPath there makes Windows label notifications as "Electron" and
   // notification activation later opens the raw Electron welcome screen.
@@ -89,19 +113,10 @@ function registerWindowsNotificationShortcut() {
   };
 
   try {
-    if (fs.existsSync(legacyElectronShortcutPath)) {
-      try {
-        const legacyShortcut = shell.readShortcutLink(legacyElectronShortcutPath);
-        if (path.resolve(legacyShortcut.target) === path.resolve(launchSpec.target)) {
-          fs.unlinkSync(legacyElectronShortcutPath);
-          log.info("Removed legacy Electron notification shortcut");
-        }
-      } catch (error) {
-        log.warn("Could not inspect legacy Electron notification shortcut", error);
-      }
+    for (const shortcutPath of shortcutPaths) {
+      shell.writeShortcutLink(shortcutPath, "replace", shortcutOptions)
+        || shell.writeShortcutLink(shortcutPath, "create", shortcutOptions);
     }
-    shell.writeShortcutLink(shortcutPath, "replace", shortcutOptions)
-      || shell.writeShortcutLink(shortcutPath, "create", shortcutOptions);
     log.info("Registered Windows notification shortcut", {
       target: launchSpec.target,
       args: launchSpec.args,
@@ -113,9 +128,9 @@ function registerWindowsNotificationShortcut() {
 }
 
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
-app.commandLine.appendSwitch("enable-features", "WebRTCPipeWireCapturer");
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.commandLine.appendSwitch("enable-features", "WebRtcApmInAudioService,WebRtcAllowInputVolumeAdjustment");
 
 log.initialize({ preload: true });
 log.transports.file.level = "info";
@@ -208,16 +223,6 @@ function showNativeNotification(payload = {}) {
   }
 
   const normalized = normalizeNotificationPayload(payload);
-  if (normalized.type === "incoming-call" && normalized.entityId) {
-    const alreadyActive = [...activeNativeNotifications].some((item) => (
-      item.vitelNotificationType === "incoming-call"
-      && item.vitelNotificationEntityId === normalized.entityId
-    ));
-    if (alreadyActive) {
-      notificationLog("active-call-duplicate-suppressed", { type: normalized.type, entityId: normalized.entityId });
-      return false;
-    }
-  }
   if (!nativeNotificationDeduper.shouldDeliver(normalized.dedupeKey)) {
     notificationLog("duplicate-suppressed", { type: normalized.type, entityId: normalized.entityId });
     return false;
@@ -241,7 +246,7 @@ function showNativeNotification(payload = {}) {
   };
   if ((process.platform === "darwin" || process.platform === "win32") && normalized.type === "incoming-call") {
     notificationOptions.actions = [
-      { type: "button", text: "Accept" },
+      { type: "button", text: "Answer" },
       { type: "button", text: "Reject" }
     ];
   }
@@ -249,55 +254,71 @@ function showNativeNotification(payload = {}) {
     notificationOptions.closeButtonText = "Reject";
   }
 
-  const notification = new Notification(notificationOptions);
-  notification.vitelNotificationType = normalized.type;
-  notification.vitelNotificationEntityId = normalized.entityId;
-  activeNativeNotifications.add(notification);
+  try {
+    const notification = new Notification(notificationOptions);
+    activeNativeNotifications.add(notification);
 
-  if (process.platform === "darwin" && app.dock) {
-    try {
-      app.dock.bounce(normalized.type === "incoming-call" ? "critical" : "informational");
-    } catch (error) {
-      log.warn("[DesktopNotification] Dock bounce failed", error);
+    if (process.platform === "darwin" && app.dock) {
+      try {
+        stopDockBounce();
+        activeDockBounceId = app.dock.bounce(normalized.type === "incoming-call" ? "critical" : "informational");
+      } catch (error) {
+        log.warn("[DesktopNotification] Dock bounce failed", error);
+      }
     }
-  }
 
-  if (normalized.type === "incoming-call" && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isFocused()) {
-    mainWindow.flashFrame(true);
-    mainWindow.once("focus", () => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.flashFrame(false);
+    if (normalized.type === "incoming-call" && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isFocused()) {
+      mainWindow.flashFrame(true);
+      mainWindow.once("focus", () => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.flashFrame(false);
+      });
+    }
+
+    notification.on("click", () => {
+      stopDockBounce();
+      activeNativeNotifications.delete(notification);
+      notificationLog("clicked", { type: normalized.type, screen: normalized.screen, action: "open" });
+      dispatchNotificationClick(notificationActionPayload(normalized, "open"));
     });
+
+    notification.on("action", (event, index) => {
+      stopDockBounce();
+      const action = resolveNotificationAction(event, index);
+      activeNativeNotifications.delete(notification);
+      notificationLog("clicked", { type: normalized.type, screen: normalized.screen, action });
+      const payload = notificationActionPayload(normalized, action);
+      if (action === "accept" || action === "answer") {
+        dispatchNotificationClick(payload);
+      }
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("notification-action", payload);
+      }
+    });
+
+    notification.once("show", () => {
+      notificationLog("displayed", { type: normalized.type, screen: normalized.screen, entityId: normalized.entityId });
+    });
+    notification.on("close", () => {
+      stopDockBounce();
+      activeNativeNotifications.delete(notification);
+      notificationLog("closed", { type: normalized.type, entityId: normalized.entityId });
+      if (normalized.type === "incoming-call" && mainWindow && !mainWindow.isDestroyed()) {
+        const payload = notificationActionPayload(normalized, "close");
+        mainWindow.webContents.send("notification-action", payload);
+      }
+    });
+    notification.on("failed", (_event, error) => {
+      activeNativeNotifications.delete(notification);
+      log.error("[DesktopNotification]", { event: "display-failed", type: normalized.type, error });
+    });
+
+    notification.show();
+    registerWindowsNotificationShortcut();
+    return true;
+  } catch (error) {
+    log.error("[DesktopNotification] Failed to create or display notification", { error: error?.message || error });
+    return false;
   }
-
-  notification.on("click", () => {
-    try { notification.close(); } catch {}
-    activeNativeNotifications.delete(notification);
-    notificationLog("clicked", { type: normalized.type, screen: normalized.screen, action: "open" });
-    dispatchNotificationClick(notificationActionPayload(normalized, "open"));
-  });
-
-  notification.on("action", (details, legacyActionIndex) => {
-    const action = resolveNotificationAction(details, legacyActionIndex);
-    try { notification.close(); } catch {}
-    activeNativeNotifications.delete(notification);
-    notificationLog("clicked", { type: normalized.type, screen: normalized.screen, action });
-    dispatchNotificationClick(notificationActionPayload(normalized, action));
-  });
-
-  notification.once("show", () => {
-    notificationLog("displayed", { type: normalized.type, screen: normalized.screen, entityId: normalized.entityId });
-  });
-  notification.on("close", () => {
-    activeNativeNotifications.delete(notification);
-    notificationLog("closed", { type: normalized.type, entityId: normalized.entityId });
-  });
-  notification.on("failed", (_event, error) => {
-    activeNativeNotifications.delete(notification);
-    log.error("[DesktopNotification]", { event: "display-failed", type: normalized.type, error });
-  });
-
-  notification.show();
-  return true;
 }
 
 function createSplashWindow() {
@@ -367,17 +388,16 @@ function createMainWindow() {
       if (!backgroundNoticeShown) {
         backgroundNoticeShown = true;
         showNativeNotification({
-          title: "VitelGlobal is running in the background",
-          body: "Calls and notifications remain active. Open VitelGlobal from the system tray to return.",
-          silent: true,
-          type: "general",
-          screen: "/notifications"
+          title: APP_NAME,
+          body: "Calls and notifications remain active in the background.",
+          silent: true
         });
       }
     }
   });
 
   mainWindow.on("focus", () => {
+    stopDockBounce();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("window-activated");
     }
@@ -457,7 +477,9 @@ function createMainWindow() {
     });
   });
 
-  return mainWindow.loadURL(APP_URL);
+  return mainWindow.loadURL(APP_URL, {
+    extraHeaders: "pragma: no-cache\ncache-control: no-cache\n"
+  });
 }
 
 function createTray() {
@@ -489,6 +511,7 @@ function showMainWindow(reason = "user") {
   try {
     if (process.platform === "darwin" && app.dock) {
       try {
+        stopDockBounce();
         app.dock.show();
       } catch (e) {}
     }
@@ -535,6 +558,23 @@ function createMenu() {
       submenu: [
         { label: "Home", accelerator: "CommandOrControl+H", click: () => mainWindow?.loadURL(APP_URL) },
         { label: "Reload", accelerator: "CommandOrControl+R", click: () => mainWindow?.webContents.reload() },
+        { label: "Force Reload (Clear Cache)", accelerator: "CommandOrControl+Shift+R", click: () => mainWindow?.webContents.reloadIgnoringCache() },
+        {
+          label: "Clear All Caches & Reload",
+          click: async () => {
+            try {
+              if (session?.defaultSession) {
+                await session.defaultSession.clearCache();
+                await session.defaultSession.clearStorageData({
+                  storages: ["serviceworkers", "cachestorage", "shadercache"]
+                });
+              }
+              mainWindow?.webContents.reloadIgnoringCache();
+            } catch (e) {
+              log.error("Clear cache failed:", e);
+            }
+          }
+        },
         { type: "separator" },
         { label: "Choose File", accelerator: "CommandOrControl+O", click: () => chooseFiles(mainWindow) },
         { type: "separator" },
@@ -556,12 +596,14 @@ function createMenu() {
     {
       label: "View",
       submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
         { role: "togglefullscreen" },
         { role: "zoomIn" },
         { role: "zoomOut" },
         { role: "resetZoom" },
         { type: "separator" },
-        { role: "toggleDevTools", visible: !app.isPackaged }
+        { role: "toggleDevTools" }
       ]
     },
     {
@@ -610,6 +652,9 @@ function chooseFiles(owner) {
   });
 }
 
+let isCallActiveInApp = false;
+let autoUpdateCheckInterval = null;
+
 function checkForUpdates() {
   if (!app.isPackaged) {
     const message = "Update checks run only from a packaged application.";
@@ -629,6 +674,20 @@ function checkForUpdates() {
   });
 }
 
+function quitAndInstallUpdate() {
+  if (!autoUpdater) {
+    return false;
+  }
+  try {
+    log.info("Applying downloaded update via quitAndInstall...");
+    autoUpdater.quitAndInstall(false, true);
+    return true;
+  } catch (err) {
+    log.error("Failed to quit and install update:", err);
+    return false;
+  }
+}
+
 function configureAutoUpdater() {
   if (autoUpdater) {
     return autoUpdater;
@@ -636,24 +695,72 @@ function configureAutoUpdater() {
 
   ({ autoUpdater } = require("electron-updater"));
   autoUpdater.logger = log;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
   autoUpdater.on("checking-for-update", () => send("update:status", { status: "checking" }));
-  autoUpdater.on("update-available", (info) => send("update:status", { status: "available", info }));
-  autoUpdater.on("update-not-available", (info) => send("update:status", { status: "not-available", info }));
-  autoUpdater.on("download-progress", (progress) => send("update:progress", progress));
-  autoUpdater.on("update-downloaded", (info) => {
-    send("update:status", { status: "downloaded", info });
-    showNativeNotification({
-      title: "Update ready",
-      body: "Restart VitelGlobal Desktop to finish installing the update."
-    });
+  autoUpdater.on("update-available", (info) => {
+    log.info("Update available:", info?.version);
+    send("update:status", { status: "available", info });
   });
-  autoUpdater.on("error", (error) => send("update:status", { status: "error", message: error.message }));
+  autoUpdater.on("update-not-available", (info) => {
+    send("update:status", { status: "not-available", info });
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    send("update:progress", progress);
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    log.info("Update downloaded:", info?.version, "isCallActive:", isCallActiveInApp);
+    send("update:status", {
+      status: "downloaded",
+      info,
+      isCallActive: isCallActiveInApp
+    });
+
+    if (!isCallActiveInApp) {
+      showNativeNotification({
+        title: "Update ready",
+        body: `VitelGlobal Desktop ${info?.version || ""} is ready to install.`
+      });
+    } else {
+      showNativeNotification({
+        title: "Update downloaded",
+        body: `An update is available. Install after your current call.`
+      });
+    }
+  });
+  autoUpdater.on("error", (error) => {
+    log.error("AutoUpdater error:", error);
+    send("update:status", { status: "error", message: error?.message || String(error) });
+  });
+
+  // Schedule periodic background check every 60 minutes
+  if (app.isPackaged && !autoUpdateCheckInterval) {
+    autoUpdateCheckInterval = setInterval(() => {
+      if (!isCallActiveInApp) {
+        checkForUpdates().catch(() => {});
+      }
+    }, 60 * 60 * 1000);
+
+    // Initial check after app start
+    setTimeout(() => {
+      if (!isCallActiveInApp) {
+        checkForUpdates().catch(() => {});
+      }
+    }, 45 * 1000);
+  }
 
   return autoUpdater;
 }
 
 function configureSession() {
   const defaultSession = session.defaultSession;
+
+  // Clear stale HTTP and ServiceWorker caches on startup so desktop app always loads fresh code
+  defaultSession.clearCache().catch(() => {});
+  defaultSession.clearStorageData({
+    storages: ["serviceworkers", "cachestorage", "shadercache"]
+  }).catch(() => {});
 
   defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
     const permitted = new Set([
@@ -664,7 +771,8 @@ function configureSession() {
       "notifications",
       "fullscreen",
       "clipboard-sanitized-write",
-      "clipboard-read"
+      "clipboard-read",
+      "geolocation"
     ]);
 
     log.info("Permission request auto-granted:", { permission, requestingUrl: details?.requestingUrl });
@@ -672,7 +780,17 @@ function configureSession() {
   });
 
   defaultSession.setPermissionCheckHandler((_webContents, permission) => {
-    return ["media", "microphone", "camera", "display-capture", "notifications", "fullscreen", "clipboard-sanitized-write", "clipboard-read"].includes(permission);
+    return [
+      "media",
+      "microphone",
+      "camera",
+      "display-capture",
+      "notifications",
+      "fullscreen",
+      "clipboard-sanitized-write",
+      "clipboard-read",
+      "geolocation"
+    ].includes(permission);
   });
 
   if (typeof defaultSession.setDisplayMediaRequestHandler === "function") {
@@ -694,6 +812,11 @@ function configureSession() {
     const headers = { ...details.responseHeaders };
     headers["X-Content-Type-Options"] = ["nosniff"];
     headers["Referrer-Policy"] = ["strict-origin-when-cross-origin"];
+    if (details.resourceType === "mainFrame" || details.resourceType === "subFrame") {
+      headers["Cache-Control"] = ["no-cache, no-store, must-revalidate"];
+      headers["Pragma"] = ["no-cache"];
+      headers["Expires"] = ["0"];
+    }
     callback({ responseHeaders: headers });
   });
 }
@@ -738,7 +861,15 @@ function registerIpc() {
     logPath: log.transports.file.getFile().path
   }));
 
-  ipcMain.handle("app:reload", () => mainWindow?.webContents.reload());
+  ipcMain.handle("app:reload", async () => {
+    try {
+      await mainWindow?.webContents.session.clearCache();
+    } catch (err) {
+      log.warn("Failed to clear session cache on reload:", err);
+    }
+    mainWindow?.webContents.reloadIgnoringCache();
+    return { ok: true };
+  });
   ipcMain.handle("app:home", () => mainWindow?.loadURL(APP_URL));
   ipcMain.handle("app:open-logs", () => shell.showItemInFolder(log.transports.file.getFile().path));
   ipcMain.handle("app:choose-files", () => chooseFiles(mainWindow));
@@ -746,22 +877,14 @@ function registerIpc() {
   ipcMain.handle("app:write-clipboard", (_event, text) => clipboard.writeText(String(text ?? "")));
   ipcMain.handle("app:notify", (_event, payload) => showNativeNotification(payload));
   ipcMain.handle("app:clear-notifications", (_event, type) => {
-    const requestedType = String(type || "").trim().toLowerCase();
-    let cleared = 0;
-    for (const notification of [...activeNativeNotifications]) {
-      const notificationType = String(notification.vitelNotificationType || "").trim().toLowerCase();
-      if (!shouldClearNotificationType(notificationType, requestedType)) continue;
+    stopDockBounce();
+    for (const notification of activeNativeNotifications) {
       try {
         notification.close();
-        cleared += 1;
       } catch (err) {}
-      activeNativeNotifications.delete(notification);
     }
-    if (requestedType === "incoming-call" && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.flashFrame(false);
-    }
-    notificationLog("clear-request", { requestedType: requestedType || "all", cleared, remaining: activeNativeNotifications.size });
-    return cleared;
+    activeNativeNotifications.clear();
+    return true;
   });
   ipcMain.handle("app:focus", () => showMainWindow());
   ipcMain.handle("app:flash-frame", (_event, enabled) => {
@@ -775,6 +898,49 @@ function registerIpc() {
     return temp;
   });
   ipcMain.handle("app:check-for-updates", () => checkForUpdates());
+  ipcMain.handle("app:quit-and-install", () => quitAndInstallUpdate());
+  ipcMain.handle("app:set-call-active", (_event, active) => {
+    isCallActiveInApp = Boolean(active);
+    return isCallActiveInApp;
+  });
+  ipcMain.handle("app:get-location", async () => {
+    try {
+      const https = require("https");
+      return await new Promise((resolve) => {
+        const req = https.get("https://ipwho.is/", { timeout: 4000 }, (res) => {
+          let data = "";
+          res.on("data", (chunk) => (data += chunk));
+          res.on("end", () => {
+            try {
+              const json = JSON.parse(data);
+              if (json && json.success && typeof json.latitude === "number" && typeof json.longitude === "number") {
+                resolve({
+                  coords: {
+                    latitude: json.latitude,
+                    longitude: json.longitude,
+                    accuracy: 1000,
+                  },
+                  city: json.city,
+                  region: json.region,
+                  country: json.country,
+                  timestamp: Date.now(),
+                });
+                return;
+              }
+            } catch {}
+            resolve(null);
+          });
+        });
+        req.on("error", () => resolve(null));
+        req.on("timeout", () => {
+          req.destroy();
+          resolve(null);
+        });
+      });
+    } catch {
+      return null;
+    }
+  });
   ipcMain.handle("app:get-auto-launch", () => app.getLoginItemSettings().openAtLogin);
   ipcMain.handle("app:set-auto-launch", (_event, enabled) => {
     app.setLoginItemSettings({
@@ -793,6 +959,45 @@ function registerIpc() {
     }
     return true;
   });
+
+  ipcMain.handle("app:clear-all-data", async () => {
+    try {
+      if (session?.defaultSession) {
+        await session.defaultSession.clearStorageData({
+          storages: ["cookies", "localstorage", "websql", "indexdb", "serviceworkers", "cachestorage"]
+        });
+      }
+      sqliteDb.clearSession();
+      return true;
+    } catch (err) {
+      log.error("[Electron] clear-all-data error:", err);
+      return false;
+    }
+  });
+
+  // SQLite Database IPC handlers
+  ipcMain.handle("sqlite:save-session", (_event, sessionData) => sqliteDb.saveSession(sessionData));
+  ipcMain.handle("sqlite:get-session", () => sqliteDb.getLatestSession());
+  ipcMain.handle("sqlite:clear-session", (_event, userId) => sqliteDb.clearSession(userId));
+
+  ipcMain.handle("sqlite:save-conversations", (_event, conversations) => sqliteDb.saveConversations(conversations));
+  ipcMain.handle("sqlite:get-conversations", () => sqliteDb.getConversations());
+
+  ipcMain.handle("sqlite:save-messages", (_event, { conversationId, messages }) => sqliteDb.saveMessages(conversationId, messages));
+  ipcMain.handle("sqlite:get-messages", (_event, conversationId) => sqliteDb.getMessages(conversationId));
+
+  ipcMain.handle("sqlite:save-sms", (_event, { line, peerNumber, messages }) => sqliteDb.saveSmsMessages(line, peerNumber, messages));
+  ipcMain.handle("sqlite:get-sms", (_event, { line, peerNumber }) => sqliteDb.getSmsMessages(line, peerNumber));
+
+  ipcMain.handle("sqlite:save-contacts", (_event, contacts) => sqliteDb.saveContacts(contacts));
+  ipcMain.handle("sqlite:get-contacts", () => sqliteDb.getContacts());
+
+  ipcMain.handle("sqlite:enqueue-outbox", (_event, mutation) => sqliteDb.enqueueOutboxMutation(mutation));
+  ipcMain.handle("sqlite:get-outbox", () => sqliteDb.getPendingOutboxMutations());
+  ipcMain.handle("sqlite:dequeue-outbox", (_event, id) => sqliteDb.dequeueOutboxMutation(id));
+
+  ipcMain.handle("sqlite:set-kv", (_event, { key, value }) => sqliteDb.setKV(key, value));
+  ipcMain.handle("sqlite:get-kv", (_event, key) => sqliteDb.getKV(key));
 }
 
 app.on("certificate-error", (event, _webContents, url, error, certificate, callback) => {
@@ -866,6 +1071,7 @@ app.whenReady().then(async () => {
   } else {
     app.setAsDefaultProtocolClient("vitelglobal");
   }
+  sqliteDb.initializeDatabase(app.getPath("userData"));
   configureSession();
   registerIpc();
   configureAutoUpdater();
