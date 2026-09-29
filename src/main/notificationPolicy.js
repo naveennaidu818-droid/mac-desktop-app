@@ -54,7 +54,11 @@ function normalizeNotificationPayload(payload = {}) {
   const screen = safeScreen(payload.screen || data.screen, type);
   const entityId = data.conversationId || data.peerNumber || data.callId || data.meetingId
     || data.voicemailId || data.contactId || data.callerNumber || data.id || payload.conversationId || "";
-  const sourceId = payload.id || data.notificationId || data.messageId || entityId;
+  const explicitMsgId = String(payload.id || data.id || data.messageId || "").trim();
+  const sourceId = explicitMsgId || entityId;
+  const dedupeKey = explicitMsgId
+    ? `${type}:msg:${explicitMsgId}`
+    : [type, String(sourceId || ""), String(payload.title || ""), String(payload.body || "")].join("|");
 
   return {
     title: sanitizeNotificationTitle(payload.title || "VitelGlobal Desktop").slice(0, 120),
@@ -64,7 +68,7 @@ function normalizeNotificationPayload(payload = {}) {
     screen,
     data,
     entityId: String(entityId || ""),
-    dedupeKey: [type, String(sourceId || ""), String(payload.title || ""), String(payload.body || "")].join("|")
+    dedupeKey
   };
 }
 
@@ -74,8 +78,11 @@ function createNotificationDeduper({ windowMs = 2500, now = () => Date.now() } =
     shouldDeliver(key) {
       const safeKey = String(key || "");
       const currentTime = now();
+      const isExplicitMsgId = safeKey.includes(":msg:");
+      const maxAge = isExplicitMsgId ? 600000 : windowMs;
       for (const [existingKey, createdAt] of recent) {
-        if (currentTime - createdAt > windowMs) recent.delete(existingKey);
+        const itemMaxAge = existingKey.includes(":msg:") ? 600000 : windowMs;
+        if (currentTime - createdAt > itemMaxAge) recent.delete(existingKey);
       }
       if (!safeKey || recent.has(safeKey)) return !safeKey;
       recent.set(safeKey, currentTime);
