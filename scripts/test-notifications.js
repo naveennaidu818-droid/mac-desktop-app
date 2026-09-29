@@ -76,7 +76,16 @@ const sms = normalizeNotificationPayload({
 });
 equal(sms.entityId, "19086631380", "SMS exact peer retained");
 equal(sms.data.conversationId, "19086631380", "top-level conversation copied into click data");
-ok(sms.dedupeKey.startsWith("sms|sms-10|"), "SMS stable duplicate key");
+equal(sms.dedupeKey, "sms:msg:sms-10", "SMS stable duplicate key");
+
+const smsFallback = normalizeNotificationPayload({
+  type: "sms",
+  title: "Rob",
+  body: "Latest SMS",
+  conversationId: "19086631380",
+  data: { peerNumber: "19086631380" }
+});
+ok(smsFallback.dedupeKey.startsWith("sms|19086631380|"), "SMS fallback duplicate key");
 
 const entityCases = [
   ["incoming-call", { callId: "call-8" }, "call-8"],
