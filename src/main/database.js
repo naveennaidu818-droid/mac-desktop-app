@@ -289,8 +289,8 @@ function clearSession(userId = null) {
         db.exec(`DELETE FROM cached_messages`);
         db.exec(`DELETE FROM cached_sms`);
         db.exec(`DELETE FROM cached_contacts`);
-        db.exec(`DELETE FROM offline_outbox`);
-        db.exec(`DELETE FROM kv_store`);
+        db.exec(`DELETE FROM offline_outbox_queue`);
+        db.exec(`DELETE FROM app_kv_store`);
       }
       return true;
     } catch (err) {

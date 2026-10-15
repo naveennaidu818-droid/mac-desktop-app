@@ -45,9 +45,9 @@ const routingCases = [
   ["contact-sync", "contact-sync", "/contact-sync"],
   ["sync-completed", "contact-sync", "/contact-sync"],
   ["presence", "presence", "/contacts"],
-  ["general", "general", "/notifications"],
-  ["system", "general", "/notifications"],
-  ["unknown-type", "general", "/notifications"]
+  ["general", "general", null],
+  ["system", "general", null],
+  ["unknown-type", "general", null]
 ];
 
 for (const [inputType, expectedType, expectedScreen] of routingCases) {
@@ -76,7 +76,7 @@ const sms = normalizeNotificationPayload({
 });
 equal(sms.entityId, "19086631380", "SMS exact peer retained");
 equal(sms.data.conversationId, "19086631380", "top-level conversation copied into click data");
-equal(sms.dedupeKey, "sms:msg:sms-10", "SMS stable duplicate key");
+equal(sms.dedupeKey, "sms:msg:sms-10:v=false", "SMS stable duplicate key");
 
 const smsFallback = normalizeNotificationPayload({
   type: "sms",
@@ -112,6 +112,8 @@ deepEqual(notificationActionPayload(call, "accept"), {
     callerNumber: "19085550100",
     notificationAction: "accept",
     answerImmediately: true,
+    answerWithVideo: false,
+    audioOnly: false,
     rejectImmediately: false
   }
 }, "incoming call accept action");

@@ -41,6 +41,14 @@ button:hover {
   background: #0d235d;
 }
 
+button.primary-accent {
+  background: var(--orange);
+}
+
+button.primary-accent:hover {
+  background: #d86411;
+}
+
 button.secondary {
   color: var(--blue);
   background: #e9eef8;

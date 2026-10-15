@@ -1,5 +1,6 @@
 "use strict";
 
+const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const { pathToFileURL } = require("node:url");
@@ -17,8 +18,9 @@ const {
   clipboard,
   globalShortcut,
   crashReporter,
-  desktopCapturer,
-  systemPreferences
+  systemPreferences,
+  protocol,
+  net
 } = require("electron");
 const log = require("electron-log/main");
 const sqliteDb = require("./database");
@@ -26,7 +28,8 @@ const {
   buildWindowsLaunchSpec,
   createNotificationDeduper,
   normalizeNotificationPayload,
-  notificationActionPayload
+  notificationActionPayload,
+  resolveNotificationAction
 } = require("./notificationPolicy");
 
 const APP_NAME = "VitelGlobal Desktop";
@@ -61,6 +64,20 @@ function stopDockBounce() {
 let autoUpdater;
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "app",
+    privileges: {
+      standard: true,
+      secure: true,
+      allowServiceWorkers: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true
+    }
+  }
+]);
+
 app.name = APP_NAME;
 app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
 if (process.platform === "win32") {
@@ -85,21 +102,33 @@ function registerWindowsNotificationShortcut() {
   try {
     if (fs.existsSync(legacyElectronShortcutPath)) {
       fs.unlinkSync(legacyElectronShortcutPath);
+      log.info("Cleaned up legacy Electron shortcut:", legacyElectronShortcutPath);
     }
   } catch (e) {}
 
-  const shortcutPaths = [
-    path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "VitelGlobal Desktop.lnk")
+  const additionalLegacyElectronPaths = [
+    path.join(app.getPath("desktop"), "Electron.lnk"),
+    path.join(process.env.PROGRAMDATA || "C:\\ProgramData", "Microsoft", "Windows", "Start Menu", "Programs", "Electron.lnk")
   ];
-  // Portable Electron apps run from a temporary extraction directory. Using
-  // process.execPath there makes Windows label notifications as "Electron" and
-  // notification activation later opens the raw Electron welcome screen.
+  for (const legacyPath of additionalLegacyElectronPaths) {
+    try {
+      if (fs.existsSync(legacyPath)) {
+        fs.unlinkSync(legacyPath);
+      }
+    } catch (e) {}
+  }
+
+  const shortcutPaths = [
+    path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "VitelGlobal Desktop.lnk"),
+    path.join(app.getPath("desktop"), "VitelGlobal Desktop.lnk")
+  ];
+
   const launchSpec = buildWindowsLaunchSpec({
     isPackaged: app.isPackaged,
     execPath: process.execPath,
     portableExecutableFile: process.env.PORTABLE_EXECUTABLE_FILE,
     appPath: app.getAppPath(),
-    brandedIconPath: iconPath()
+    brandedIconPath: assetPath("icons", "icon.ico")
   });
   const shortcutOptions = {
     target: launchSpec.target,
@@ -120,6 +149,7 @@ function registerWindowsNotificationShortcut() {
     log.info("Registered Windows notification shortcut", {
       target: launchSpec.target,
       args: launchSpec.args,
+      icon: launchSpec.icon,
       portable: Boolean(process.env.PORTABLE_EXECUTABLE_FILE)
     });
   } catch (err) {
@@ -163,14 +193,58 @@ function iconPath() {
   return process.platform === "win32" ? ico : png;
 }
 
+function getAppDistPath() {
+  const packagedPath = path.join(__dirname, "..", "app-dist");
+  if (fs.existsSync(path.join(packagedPath, "index.html"))) {
+    return packagedPath;
+  }
+  const devPath = path.resolve(__dirname, "..", "..", "..", "web-app", "dist");
+  if (fs.existsSync(path.join(devPath, "index.html"))) {
+    return devPath;
+  }
+  return null;
+}
+
+function registerAppProtocol() {
+  const distDir = getAppDistPath();
+  if (!distDir) {
+    log.warn("[Main] Local web app dist directory not found. Protocol app:// not registered.");
+    return;
+  }
+
+  log.info("[Main] Registering app:// protocol mapped to:", distDir);
+
+  protocol.handle("app", (request) => {
+    try {
+      const parsedUrl = new URL(request.url);
+      let requestedPath = decodeURIComponent(parsedUrl.pathname);
+      if (requestedPath === "/" || requestedPath === "") {
+        requestedPath = "/index.html";
+      }
+
+      const safePath = path.normalize(requestedPath).replace(/^(\.\.[\/\\])+/, "");
+      let resolvedPath = path.join(distDir, safePath);
+
+      if (!fs.existsSync(resolvedPath) || fs.statSync(resolvedPath).isDirectory()) {
+        resolvedPath = path.join(distDir, "index.html");
+      }
+
+      return net.fetch(pathToFileURL(resolvedPath).toString());
+    } catch (err) {
+      log.error("[Main] Protocol app:// error:", err);
+      return new Response("Internal Server Error", { status: 500 });
+    }
+  });
+}
+
 function isTrustedUrl(rawUrl) {
   try {
     const parsed = new URL(rawUrl);
-    if (!["https:", "vitelglobal:"].includes(parsed.protocol)) {
+    if (!["https:", "vitelglobal:", "app:"].includes(parsed.protocol)) {
       return false;
     }
 
-    if (parsed.protocol === "vitelglobal:") {
+    if (parsed.protocol === "vitelglobal:" || parsed.protocol === "app:") {
       return true;
     }
 
@@ -197,6 +271,21 @@ function dispatchNotificationClick(payload) {
   const restored = showMainWindow("notification-click");
   notificationLog("window-restored", { restored, type: payload.type, screen: payload.screen });
   if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  // If payload indicates stayOnPage, download, export, general, or has no valid screen to navigate to:
+  // simply restore/focus the window and DO NOT dispatch a deep-link navigation!
+  if (
+    payload.type === "download" ||
+    payload.type === "export" ||
+    payload.type === "general" ||
+    payload.stayOnPage ||
+    payload.data?.stayOnPage ||
+    !payload.screen ||
+    payload.screen === "/notifications"
+  ) {
+    notificationLog("stay-on-page", { type: payload.type, screen: payload.screen });
+    return;
+  }
 
   const deliver = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -244,13 +333,20 @@ function showNativeNotification(payload = {}) {
     silent: normalized.silent,
     timeoutType: normalized.type === "incoming-call" ? "never" : "default"
   };
-  if ((process.platform === "darwin" || process.platform === "win32") && normalized.type === "incoming-call") {
-    notificationOptions.actions = [
+  const isIncomingCall = normalized.type === "incoming-call";
+  const isVideoCall = isIncomingCall && Boolean(normalized.data?.isVideo === true || normalized.data?.isVideo === "true");
+
+  if ((process.platform === "darwin" || process.platform === "win32") && isIncomingCall) {
+    notificationOptions.actions = isVideoCall ? [
+      { type: "button", text: "Answer Video" },
+      { type: "button", text: "Audio Only" },
+      { type: "button", text: "Reject" }
+    ] : [
       { type: "button", text: "Answer" },
       { type: "button", text: "Reject" }
     ];
   }
-  if (process.platform === "darwin" && normalized.type === "incoming-call") {
+  if (process.platform === "darwin" && isIncomingCall) {
     notificationOptions.closeButtonText = "Reject";
   }
 
@@ -261,13 +357,13 @@ function showNativeNotification(payload = {}) {
     if (process.platform === "darwin" && app.dock) {
       try {
         stopDockBounce();
-        activeDockBounceId = app.dock.bounce(normalized.type === "incoming-call" ? "critical" : "informational");
+        activeDockBounceId = app.dock.bounce(isIncomingCall ? "critical" : "informational");
       } catch (error) {
         log.warn("[DesktopNotification] Dock bounce failed", error);
       }
     }
 
-    if (normalized.type === "incoming-call" && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isFocused()) {
+    if (isIncomingCall && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isFocused()) {
       mainWindow.flashFrame(true);
       mainWindow.once("focus", () => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.flashFrame(false);
@@ -283,15 +379,19 @@ function showNativeNotification(payload = {}) {
 
     notification.on("action", (event, index) => {
       stopDockBounce();
-      const action = resolveNotificationAction(event, index);
       activeNativeNotifications.delete(notification);
-      notificationLog("clicked", { type: normalized.type, screen: normalized.screen, action });
-      const payload = notificationActionPayload(normalized, action);
-      if (action === "accept" || action === "answer") {
-        dispatchNotificationClick(payload);
-      }
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("notification-action", payload);
+      try {
+        const action = resolveNotificationAction(event, index, isVideoCall);
+        notificationLog("clicked", { type: normalized.type, screen: normalized.screen, action });
+        const payload = notificationActionPayload(normalized, action);
+        if (action === "accept" || action === "answer" || action === "accept-video" || action === "accept-audio") {
+          dispatchNotificationClick(payload);
+        }
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("notification-action", payload);
+        }
+      } catch (err) {
+        log.error("[DesktopNotification] Error handling action:", err);
       }
     });
 
@@ -301,10 +401,14 @@ function showNativeNotification(payload = {}) {
     notification.on("close", () => {
       stopDockBounce();
       activeNativeNotifications.delete(notification);
-      notificationLog("closed", { type: normalized.type, entityId: normalized.entityId });
-      if (normalized.type === "incoming-call" && mainWindow && !mainWindow.isDestroyed()) {
-        const payload = notificationActionPayload(normalized, "close");
-        mainWindow.webContents.send("notification-action", payload);
+      try {
+        notificationLog("closed", { type: normalized.type, entityId: normalized.entityId });
+        if (normalized.type === "incoming-call" && mainWindow && !mainWindow.isDestroyed()) {
+          const payload = notificationActionPayload(normalized, "close");
+          mainWindow.webContents.send("notification-action", payload);
+        }
+      } catch (err) {
+        log.error("[DesktopNotification] Error handling close:", err);
       }
     });
     notification.on("failed", (_event, error) => {
@@ -340,7 +444,7 @@ function createSplashWindow() {
   });
 
   try {
-    const brandedIcon = nativeImage.createFromPath(iconPath());
+    const brandedIcon = nativeImage.createFromPath(assetPath("icons", "icon.png"));
     if (!brandedIcon.isEmpty()) {
       splashWindow.setIcon(brandedIcon);
     }
@@ -373,7 +477,7 @@ function createMainWindow() {
   });
 
   try {
-    const brandedIcon = nativeImage.createFromPath(iconPath());
+    const brandedIcon = nativeImage.createFromPath(assetPath("icons", "icon.png"));
     if (!brandedIcon.isEmpty()) {
       mainWindow.setIcon(brandedIcon);
     }
@@ -420,6 +524,16 @@ function createMainWindow() {
     }
   });
 
+  // Safety fallback: ensure mainWindow is displayed if ready-to-show is delayed
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      if (splashWindow && !splashWindow.isDestroyed()) {
+        splashWindow.close();
+      }
+      mainWindow.show();
+    }
+  }, 4000);
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isTrustedUrl(url)) {
       return { action: "allow" };
@@ -439,7 +553,34 @@ function createMainWindow() {
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
     log.warn("did-fail-load", { errorCode, errorDescription, validatedUrl, isMainFrame });
     if (isMainFrame) {
-      mainWindow.loadURL(`${localPage("offline.html")}?code=${encodeURIComponent(errorCode)}&message=${encodeURIComponent(errorDescription)}`);
+      if (splashWindow && !splashWindow.isDestroyed()) {
+        splashWindow.close();
+      }
+
+      const isNetworkFailure = [
+        -106, // ERR_INTERNET_DISCONNECTED
+        -105, // ERR_NAME_NOT_RESOLVED
+        -102, // ERR_CONNECTION_REFUSED
+        -118, // ERR_CONNECTION_TIMED_OUT
+        -109, // ERR_ADDRESS_UNREACHABLE
+        -2,   // ERR_FAILED
+        -3    // ERR_ABORTED
+      ].includes(errorCode);
+
+      const distPath = getAppDistPath();
+      if (isNetworkFailure && distPath && !String(validatedUrl || "").startsWith("app://")) {
+        log.info(`[Main] Network offline (${errorCode}: ${errorDescription}). Switching to local offline workspace with SQLite...`);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.show();
+          mainWindow.loadURL("app://localhost/index.html");
+          return;
+        }
+      }
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.show();
+        mainWindow.loadURL(`${localPage("offline.html")}?code=${encodeURIComponent(errorCode)}&message=${encodeURIComponent(errorDescription)}`);
+      }
     }
   });
 
@@ -471,19 +612,25 @@ function createMainWindow() {
       if (state === "completed") {
         showNativeNotification({
           title: "Download complete",
-          body: item.getFilename()
+          body: item.getFilename(),
+          type: "download",
+          screen: null,
+          data: {
+            type: "download",
+            stayOnPage: true,
+            fileName: item.getFilename()
+          }
         });
       }
     });
   });
 
-  return mainWindow.loadURL(APP_URL, {
-    extraHeaders: "pragma: no-cache\ncache-control: no-cache\n"
-  });
+  return mainWindow.loadURL(APP_URL);
 }
 
 function createTray() {
-  tray = new Tray(nativeImage.createFromPath(iconPath()));
+  const trayImg = nativeImage.createFromPath(assetPath("icons", "tray.png"));
+  tray = new Tray(trayImg.isEmpty() ? nativeImage.createFromPath(iconPath()) : trayImg);
   tray.setToolTip(APP_NAME);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Show VitelGlobal Desktop", click: () => showMainWindow() },
@@ -698,6 +845,17 @@ function configureAutoUpdater() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
+  const updateFeedUrl = process.env.VITELGLOBAL_UPDATE_URL || "https://desktop.officemeetings.net/updates/";
+  try {
+    autoUpdater.setFeedURL({
+      provider: "generic",
+      url: updateFeedUrl
+    });
+    log.info("[AutoUpdater] Feed URL configured:", updateFeedUrl);
+  } catch (feedErr) {
+    log.warn("[AutoUpdater] Could not set custom feed URL, falling back to package config:", feedErr);
+  }
+
   autoUpdater.on("checking-for-update", () => send("update:status", { status: "checking" }));
   autoUpdater.on("update-available", (info) => {
     log.info("Update available:", info?.version);
@@ -734,20 +892,20 @@ function configureAutoUpdater() {
     send("update:status", { status: "error", message: error?.message || String(error) });
   });
 
-  // Schedule periodic background check every 60 minutes
+  // Schedule periodic background check every 15 minutes
   if (app.isPackaged && !autoUpdateCheckInterval) {
     autoUpdateCheckInterval = setInterval(() => {
       if (!isCallActiveInApp) {
         checkForUpdates().catch(() => {});
       }
-    }, 60 * 60 * 1000);
+    }, 15 * 60 * 1000);
 
-    // Initial check after app start
+    // Initial check shortly after app start
     setTimeout(() => {
       if (!isCallActiveInApp) {
         checkForUpdates().catch(() => {});
       }
-    }, 45 * 1000);
+    }, 10 * 1000);
   }
 
   return autoUpdater;
@@ -863,14 +1021,20 @@ function registerIpc() {
 
   ipcMain.handle("app:reload", async () => {
     try {
-      await mainWindow?.webContents.session.clearCache();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        await mainWindow.webContents.session.clearCache();
+        mainWindow.webContents.reloadIgnoringCache();
+      }
     } catch (err) {
       log.warn("Failed to clear session cache on reload:", err);
     }
-    mainWindow?.webContents.reloadIgnoringCache();
     return { ok: true };
   });
-  ipcMain.handle("app:home", () => mainWindow?.loadURL(APP_URL));
+  ipcMain.handle("app:home", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.loadURL(APP_URL);
+    }
+  });
   ipcMain.handle("app:open-logs", () => shell.showItemInFolder(log.transports.file.getFile().path));
   ipcMain.handle("app:choose-files", () => chooseFiles(mainWindow));
   ipcMain.handle("app:read-clipboard", () => clipboard.readText());
@@ -949,13 +1113,118 @@ function registerIpc() {
     });
     return app.getLoginItemSettings().openAtLogin;
   });
+const DIGITS_4x6 = {
+  '0': [0b1111, 0b1001, 0b1001, 0b1001, 0b1001, 0b1111],
+  '1': [0b0110, 0b0010, 0b0010, 0b0010, 0b0010, 0b0111],
+  '2': [0b1111, 0b0001, 0b1111, 0b1000, 0b1000, 0b1111],
+  '3': [0b1111, 0b0001, 0b1111, 0b0001, 0b0001, 0b1111],
+  '4': [0b1001, 0b1001, 0b1111, 0b0001, 0b0001, 0b0001],
+  '5': [0b1111, 0b1000, 0b1111, 0b0001, 0b0001, 0b1111],
+  '6': [0b1111, 0b1000, 0b1111, 0b1001, 0b1001, 0b1111],
+  '7': [0b1111, 0b0001, 0b0010, 0b0010, 0b0100, 0b0100],
+  '8': [0b1111, 0b1001, 0b1111, 0b1001, 0b1001, 0b1111],
+  '9': [0b1111, 0b1001, 0b1111, 0b0001, 0b0001, 0b1111],
+  '+': [0b0000, 0b0100, 0b1110, 0b0100, 0b0000, 0b0000]
+};
+
+function createWindowsBadgeImage(count) {
+  try {
+    const width = 32;
+    const height = 32;
+    const buf = Buffer.alloc(width * height * 4);
+    const cx = 16, cy = 16, radius = 14;
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const offset = (y * width + x) * 4;
+        const dx = x - cx + 0.5;
+        const dy = y - cy + 0.5;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist <= radius) {
+          if (dist >= radius - 2) {
+            buf[offset] = 255;
+            buf[offset + 1] = 255;
+            buf[offset + 2] = 255;
+            buf[offset + 3] = 255;
+          } else {
+            buf[offset] = 220;
+            buf[offset + 1] = 38;
+            buf[offset + 2] = 38;
+            buf[offset + 3] = 255;
+          }
+        }
+      }
+    }
+
+    const text = count > 99 ? "99+" : String(count);
+    const scale = text.length === 1 ? 2 : (text.length === 2 ? 2 : 1);
+    const charWidth = 4 * scale;
+    const charHeight = 6 * scale;
+    const spacing = 1 * scale;
+    const totalTextWidth = text.length * charWidth + (text.length - 1) * spacing;
+    const startX = Math.round(cx - totalTextWidth / 2);
+    const startY = Math.round(cy - charHeight / 2);
+
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      const bitmap = DIGITS_4x6[ch] || DIGITS_4x6['0'];
+      const curX = startX + i * (charWidth + spacing);
+
+      for (let row = 0; row < 6; row++) {
+        const rowBits = bitmap[row];
+        for (let col = 0; col < 4; col++) {
+          const isSet = (rowBits >> (3 - col)) & 1;
+          if (isSet) {
+            for (let sy = 0; sy < scale; sy++) {
+              for (let sx = 0; sx < scale; sx++) {
+                const px = curX + col * scale + sx;
+                const py = startY + row * scale + sy;
+                if (px >= 0 && px < width && py >= 0 && py < height) {
+                  const offset = (py * width + px) * 4;
+                  buf[offset] = 255;
+                  buf[offset + 1] = 255;
+                  buf[offset + 2] = 255;
+                  buf[offset + 3] = 255;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return nativeImage.createFromBitmap(buf, { width, height });
+  } catch (err) {
+    log.error("[Electron] Failed to generate dynamic badge image:", err);
+    return null;
+  }
+}
+
   ipcMain.handle("app:set-badge-count", (_event, count) => {
     const safeCount = Number.isFinite(Number(count)) ? Math.max(0, Number(count)) : 0;
     if (process.platform === "darwin" || process.platform === "linux") {
       return app.setBadgeCount(safeCount);
     }
-    if (mainWindow) {
-      mainWindow.setOverlayIcon(safeCount > 0 ? nativeImage.createFromPath(iconPath()) : null, safeCount > 0 ? `${safeCount} unread` : "");
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        if (safeCount > 0) {
+          const dynamicImg = createWindowsBadgeImage(safeCount);
+          if (dynamicImg && !dynamicImg.isEmpty()) {
+            mainWindow.setOverlayIcon(dynamicImg, `${safeCount} unread`);
+          } else {
+            const badgeOverlayPath = assetPath("icons", "badge-overlay.png");
+            const overlayImg = fs.existsSync(badgeOverlayPath)
+              ? nativeImage.createFromPath(badgeOverlayPath)
+              : null;
+            mainWindow.setOverlayIcon(overlayImg, `${safeCount} unread`);
+          }
+        } else {
+          mainWindow.setOverlayIcon(null, "");
+        }
+      } catch (err) {
+        log.error("[Electron] setOverlayIcon error:", err);
+      }
     }
     return true;
   });
@@ -998,6 +1267,19 @@ function registerIpc() {
 
   ipcMain.handle("sqlite:set-kv", (_event, { key, value }) => sqliteDb.setKV(key, value));
   ipcMain.handle("sqlite:get-kv", (_event, key) => sqliteDb.getKV(key));
+
+  ipcMain.handle("app:load-offline-app", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      log.info("[Main] Manually triggering local offline workspace...");
+      return mainWindow.loadURL("app://localhost/index.html");
+    }
+  });
+  ipcMain.handle("app:load-remote-app", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      log.info("[Main] Manually triggering remote service load...");
+      return mainWindow.loadURL(APP_URL);
+    }
+  });
 }
 
 app.on("certificate-error", (event, _webContents, url, error, certificate, callback) => {
@@ -1074,6 +1356,7 @@ app.whenReady().then(async () => {
   sqliteDb.initializeDatabase(app.getPath("userData"));
   configureSession();
   registerIpc();
+  registerAppProtocol();
   configureAutoUpdater();
   createMenu();
   createTray();
@@ -1095,6 +1378,8 @@ app.whenReady().then(async () => {
     node: process.versions.node,
     os: `${os.type()} ${os.release()}`
   });
+}).catch((err) => {
+  log.error("Fatal startup error in app.whenReady:", err);
 });
 
 app.on("will-quit", () => {

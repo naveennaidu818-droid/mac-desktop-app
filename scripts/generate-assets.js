@@ -53,16 +53,44 @@ async function writeDmgBackground() {
 
 async function main() {
   await fs.mkdir(iconsDir, { recursive: true });
-  const logo = await fs.readFile(sourceLogo);
+  const fsSync = require("node:fs");
+  const masterFile = path.join(iconsDir, "vitel-v-master.png");
+  let icon;
 
-  const icon = await sharp(logo, { density: 300 })
-    .resize(1024, 1024)
-    .png()
-    .toBuffer();
+  if (fsSync.existsSync(masterFile)) {
+    const raw = await fs.readFile(masterFile);
+    const trimmed = await sharp(raw).trim().toBuffer();
+    const resized = await sharp(trimmed).resize(1000, 1000, {
+      fit: "contain",
+      background: { r: 0, g: 0, b: 0, alpha: 0 }
+    }).toBuffer();
+    icon = await sharp({
+      create: {
+        width: 1024,
+        height: 1024,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 }
+      }
+    })
+      .composite([{ input: resized, gravity: "center" }])
+      .png()
+      .toBuffer();
+  } else {
+    const logo = await fs.readFile(sourceLogo);
+    icon = await sharp(logo, { density: 300 })
+      .resize(1024, 1024)
+      .png()
+      .toBuffer();
+  }
 
   await fs.writeFile(path.join(iconsDir, "icon.png"), icon);
   await fs.writeFile(path.join(iconsDir, "tray.png"), icon);
   await fs.writeFile(path.join(iconsDir, "notification.png"), icon);
+
+  const webPublicIcon = path.join(root, "..", "web-app", "public", "icon.png");
+  if (fsSync.existsSync(path.dirname(webPublicIcon))) {
+    await fs.writeFile(webPublicIcon, icon);
+  }
   await writeDmgBackground();
 
   const generatedPngs = [];

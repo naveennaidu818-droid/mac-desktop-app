@@ -13,38 +13,35 @@ const webPublicDir = path.join(rootDir, "..", "web-app", "public");
 async function main() {
   await fs.mkdir(iconsDir, { recursive: true });
 
-  // Read vitelglobal-logo.svg
-  const svgPath = path.join(iconsDir, "vitelglobal-logo.svg");
-  const svgContent = await fs.readFile(svgPath, "utf8");
-
-  // Extract embedded base64 PNG from id4 clipPath (contains the authentic orange/yellow V swoosh)
-  const match = svgContent.match(/clipPath id="id4"[\s\S]*?xlink:href="data:image\/png;base64,([^"]+)"/);
-  
+  const fsSync = require("node:fs");
+  const masterPath = path.join(iconsDir, "vitel-v-master.png");
   let vMarkPngBuffer;
-  if (match) {
-    const rawPng = Buffer.from(match[1], "base64");
-    const cropped = await sharp(rawPng)
-      .extract({ left: 0, top: 0, width: 250, height: 264 })
-      .toBuffer();
-
-    const { data, info } = await sharp(cropped).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    // Convert white background pixels to transparent alpha
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i];
-      const g = data[i + 1];
-      const b = data[i + 2];
-      if (r > 230 && g > 230 && b > 230) {
-        data[i + 3] = 0;
-      }
+  if (fsSync.existsSync(masterPath)) {
+    vMarkPngBuffer = await fs.readFile(masterPath);
+  } else {
+    // Read vitelglobal-logo.svg as fallback
+    const svgPath = path.join(rootDir, "..", "web-app", "src", "assets", "vitelglobal-logo.svg");
+    const svgContent = await fs.readFile(svgPath, "utf8");
+    const match = svgContent.match(/clipPath id="id4"[\s\S]*?xlink:href="data:image\/png;base64,([^"]+)"/);
+    if (match) {
+      const rawPng = Buffer.from(match[1], "base64");
+      vMarkPngBuffer = await sharp(rawPng)
+        .extract({ left: 0, top: 0, width: 250, height: 264 })
+        .toBuffer();
     }
-
-    vMarkPngBuffer = await sharp(data, {
-      raw: { width: info.width, height: info.height, channels: 4 }
-    }).png().toBuffer();
   }
 
+  // Trim all outer empty padding so the logo mark fills the icon frame prominently
+  const trimmedVMark = await sharp(vMarkPngBuffer).trim().toBuffer();
+  const resizedLogo = await sharp(trimmedVMark)
+    .resize(1000, 1000, {
+      fit: "contain",
+      background: { r: 0, g: 0, b: 0, alpha: 0 }
+    })
+    .toBuffer();
+
   // Build high-res 1024x1024 icon:
-  // High-res canvas holding the crisp orange/yellow V logo mark centered
+  // High-res canvas holding the crisp, large orange/yellow V logo mark centered
   const squareIcon = await sharp({
     create: {
       width: 1024,
@@ -55,7 +52,7 @@ async function main() {
   })
     .composite([
       {
-        input: await sharp(vMarkPngBuffer).resize(860, 860, { fit: "contain" }).toBuffer(),
+        input: resizedLogo,
         gravity: "center"
       }
     ])
@@ -67,7 +64,6 @@ async function main() {
   // Save icon.png to build/icons and web-app/public
   await fs.writeFile(path.join(iconsDir, "icon.png"), finalIconBuffer);
   await fs.writeFile(path.join(iconsDir, "tray.png"), finalIconBuffer);
-  const fsSync = require("node:fs");
   if (fsSync.existsSync(webPublicDir)) {
     await fs.writeFile(path.join(webPublicDir, "icon.png"), finalIconBuffer);
   }
@@ -89,6 +85,15 @@ async function main() {
   <image width="1024" height="1024" href="data:image/png;base64,${finalIconBuffer.toString("base64")}"/>
 </svg>`;
   await fs.writeFile(path.join(iconsDir, "vitel-v-icon.svg"), svgWrapper);
+
+  // Generate crisp badge overlay for Windows taskbar (vibrant notification badge indicator)
+  const badgeSvg = Buffer.from(`
+    <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="32" cy="32" r="28" fill="#e11d48" stroke="#ffffff" stroke-width="5"/>
+    </svg>
+  `);
+  const badgeOverlayPng = await sharp(badgeSvg).png().toBuffer();
+  await fs.writeFile(path.join(iconsDir, "badge-overlay.png"), badgeOverlayPng);
 
   console.log("Successfully generated crisp VitelGlobal branded icons in both exe-file and web-app/public!");
 }

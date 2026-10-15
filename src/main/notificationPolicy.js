@@ -23,18 +23,22 @@ const DEFAULT_SCREENS = Object.freeze({
   voicemail: "/voicemails",
   "contact-sync": "/contact-sync",
   presence: "/contacts",
-  general: "/notifications"
+  download: null,
+  export: null,
+  general: null
 });
 
 function canonicalNotificationType(value) {
   const raw = String(value || "general").trim().toLowerCase();
-  return TYPE_ALIASES[raw] || (DEFAULT_SCREENS[raw] ? raw : "general");
+  return TYPE_ALIASES[raw] || (DEFAULT_SCREENS[raw] !== undefined ? raw : "general");
 }
 
 function safeScreen(value, type) {
+  if (type === "download" || type === "export" || type === "general") return null;
   const raw = String(value || "").trim();
+  if (raw === "/notifications") return null;
   if (raw.startsWith("/") && !raw.startsWith("//")) return raw;
-  return DEFAULT_SCREENS[type] || DEFAULT_SCREENS.general;
+  return DEFAULT_SCREENS[type] || null;
 }
 
 function sanitizeNotificationTitle(title = "") {
@@ -54,11 +58,12 @@ function normalizeNotificationPayload(payload = {}) {
   const screen = safeScreen(payload.screen || data.screen, type);
   const entityId = data.conversationId || data.peerNumber || data.callId || data.meetingId
     || data.voicemailId || data.contactId || data.callerNumber || data.id || payload.conversationId || "";
+  const isVideoFlag = Boolean(data.isVideo === true || data.isVideo === "true");
   const explicitMsgId = String(payload.id || data.id || data.messageId || "").trim();
   const sourceId = explicitMsgId || entityId;
   const dedupeKey = explicitMsgId
-    ? `${type}:msg:${explicitMsgId}`
-    : [type, String(sourceId || ""), String(payload.title || ""), String(payload.body || "")].join("|");
+    ? `${type}:msg:${explicitMsgId}:v=${isVideoFlag}`
+    : [type, String(sourceId || ""), String(payload.title || ""), String(payload.body || ""), String(isVideoFlag)].join("|");
 
   return {
     title: sanitizeNotificationTitle(payload.title || "VitelGlobal Desktop").slice(0, 120),
@@ -110,18 +115,27 @@ function buildWindowsLaunchSpec({ isPackaged, execPath, portableExecutableFile, 
 }
 
 function notificationActionPayload(notification, action) {
+  const isVideoCall = Boolean(notification.data?.isVideo === true || notification.data?.isVideo === "true");
   const normalizedAction =
-    action === "accept" || action === "answer"
-      ? "accept"
-      : action === "reject" || action === "decline"
-        ? "reject"
-        : action === "close" || action === "dismiss" || action === "silence"
-          ? "close"
-          : "open";
+    action === "accept-video" || action === "answer-video"
+      ? "accept-video"
+      : action === "accept-audio" || action === "answer-audio"
+        ? "accept-audio"
+        : action === "accept" || action === "answer"
+          ? (isVideoCall ? "accept-video" : "accept")
+          : action === "reject" || action === "decline"
+            ? "reject"
+            : action === "close" || action === "dismiss" || action === "silence"
+              ? "close"
+              : "open";
+
+  const isAccept = normalizedAction === "accept" || normalizedAction === "accept-video" || normalizedAction === "accept-audio";
   const data = {
     ...notification.data,
     notificationAction: normalizedAction,
-    answerImmediately: normalizedAction === "accept",
+    answerImmediately: isAccept,
+    answerWithVideo: normalizedAction === "accept-video",
+    audioOnly: normalizedAction === "accept-audio",
     rejectImmediately: normalizedAction === "reject"
   };
   if (normalizedAction === "close") {
@@ -134,11 +148,35 @@ function notificationActionPayload(notification, action) {
   };
 }
 
-function resolveNotificationAction(details, legacyIndex) {
-  const index = Number.isInteger(details?.actionIndex)
-    ? details.actionIndex
-    : (Number.isInteger(legacyIndex) ? legacyIndex : (Number.isInteger(details) ? details : -1));
-  return index === 0 ? "accept" : index === 1 ? "reject" : "open";
+function resolveNotificationAction(details, legacyIndex, isVideo = false) {
+  let index = -1;
+  if (Number.isInteger(legacyIndex)) {
+    index = legacyIndex;
+  } else if (Number.isInteger(details?.actionIndex)) {
+    index = details.actionIndex;
+  } else if (Number.isInteger(details?.index)) {
+    index = details.index;
+  } else if (Number.isInteger(details)) {
+    index = details;
+  }
+
+  const actionText = String(details?.action || details?.text || (typeof details === "string" ? details : "")).toLowerCase();
+  if (actionText.includes("video")) return "accept-video";
+  if (actionText.includes("audio")) return "accept-audio";
+  if (actionText.includes("answer") || actionText.includes("accept")) return isVideo ? "accept-video" : "accept";
+  if (actionText.includes("reject") || actionText.includes("decline")) return "reject";
+  if (actionText.includes("close") || actionText.includes("dismiss") || actionText.includes("silence")) return "close";
+
+  if (isVideo) {
+    if (index === 0) return "accept-video";
+    if (index === 1) return "accept-audio";
+    if (index === 2) return "reject";
+  } else {
+    if (index === 0) return "accept";
+    if (index === 1) return "reject";
+  }
+
+  return "open";
 }
 
 function shouldClearNotificationType(activeType, targetType) {

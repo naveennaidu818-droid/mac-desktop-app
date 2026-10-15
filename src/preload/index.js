@@ -54,6 +54,8 @@ contextBridge.exposeInMainWorld("vitelDesktop", {
   onWindowActivated: (callback) => on("window-activated", callback),
   onNotificationClick: (callback) => on("notification-click", callback),
   onNotificationAction: (callback) => on("notification-action", callback),
+  loadOfflineApp: () => invoke("app:load-offline-app"),
+  loadRemoteApp: () => invoke("app:load-remote-app"),
   sqlite: {
     saveSession: (sessionData) => invoke("sqlite:save-session", sessionData),
     getSession: () => invoke("sqlite:get-session"),
