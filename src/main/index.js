@@ -24,6 +24,7 @@ const {
 } = require("electron");
 const log = require("electron-log/main");
 const sqliteDb = require("./database");
+const { attachPortalAutoLogin } = require("./portalAutoLogin");
 const {
   buildWindowsLaunchSpec,
   createNotificationDeduper,
@@ -40,7 +41,9 @@ const HOME_ORIGIN = new URL(APP_URL).origin;
 const TRUSTED_HOST_SUFFIXES = [
   "officemeetings.net",
   "vitelglobal.com",
-  "vitelglobal.in"
+  "vitelglobal.in",
+  "bharatpayroll.com",
+  "pranathiss.com"
 ];
 
 let mainWindow;
@@ -57,7 +60,7 @@ function stopDockBounce() {
   if (process.platform === "darwin" && app.dock && activeDockBounceId !== null) {
     try {
       app.dock.cancelBounce(activeDockBounceId);
-    } catch (e) {}
+    } catch (e) { }
     activeDockBounceId = null;
   }
 }
@@ -104,7 +107,7 @@ function registerWindowsNotificationShortcut() {
       fs.unlinkSync(legacyElectronShortcutPath);
       log.info("Cleaned up legacy Electron shortcut:", legacyElectronShortcutPath);
     }
-  } catch (e) {}
+  } catch (e) { }
 
   const additionalLegacyElectronPaths = [
     path.join(app.getPath("desktop"), "Electron.lnk"),
@@ -115,7 +118,7 @@ function registerWindowsNotificationShortcut() {
       if (fs.existsSync(legacyPath)) {
         fs.unlinkSync(legacyPath);
       }
-    } catch (e) {}
+    } catch (e) { }
   }
 
   const shortcutPaths = [
@@ -448,7 +451,7 @@ function createSplashWindow() {
     if (!brandedIcon.isEmpty()) {
       splashWindow.setIcon(brandedIcon);
     }
-  } catch (e) {}
+  } catch (e) { }
 
   splashWindow.loadFile(rendererPath("splash.html"));
   splashWindow.once("ready-to-show", () => splashWindow.show());
@@ -475,6 +478,41 @@ function createMainWindow() {
       backgroundThrottling: false
     }
   });
+
+  mainWindow.autoHideMenuBar = true;
+  mainWindow.setMenuBarVisibility(false);
+
+  // Block Ctrl+Shift+K, Ctrl+Shift+I, F12 and other developer shortcuts
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    const isControlOrCommand = input.control || input.meta;
+    const isShift = input.shift;
+    const key = (input.key || "").toLowerCase();
+
+    // Block Ctrl+Shift+K, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C
+    if (isControlOrCommand && isShift && ["k", "i", "j", "c"].includes(key)) {
+      event.preventDefault();
+      return;
+    }
+
+    // Block F12
+    if (key === "f12") {
+      event.preventDefault();
+      return;
+    }
+
+    // Block Ctrl+U (View Source)
+    if (isControlOrCommand && key === "u") {
+      event.preventDefault();
+      return;
+    }
+
+    // Block Ctrl+P (Print)
+    if (isControlOrCommand && key === "p") {
+      event.preventDefault();
+      return;
+    }
+  }); // vitelglobal:block-exe-shortcuts
+
 
   try {
     const brandedIcon = nativeImage.createFromPath(assetPath("icons", "icon.png"));
@@ -517,7 +555,7 @@ function createMainWindow() {
     if (splashWindow && !splashWindow.isDestroyed()) {
       splashWindow.close();
     }
-    mainWindow.show();
+    showMainWindow("initial-ready-to-show");
     if (pendingDeepLink) {
       handleDeepLink(pendingDeepLink);
       pendingDeepLink = undefined;
@@ -536,7 +574,22 @@ function createMainWindow() {
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isTrustedUrl(url)) {
-      return { action: "allow" };
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          width: 1366,
+          height: 850,
+          minWidth: 900,
+          minHeight: 600,
+          show: true,
+          autoHideMenuBar: true,
+          webPreferences: {
+            session: session.defaultSession,
+            nodeIntegration: false,
+            contextIsolation: true
+          }
+        }
+      };
     }
 
     shell.openExternal(url);
@@ -547,6 +600,65 @@ function createMainWindow() {
     if (!isTrustedUrl(url)) {
       event.preventDefault();
       shell.openExternal(url);
+    }
+  });
+
+  // Enable mouse right-click context menu (Copy, Paste, Cut, Select All, Link handling)
+  mainWindow.webContents.on("context-menu", (_event, params) => {
+    const menuTemplate = [];
+
+    if (params.linkURL) {
+      menuTemplate.push(
+        {
+          label: "Open Link",
+          click: () => shell.openExternal(params.linkURL)
+        },
+        {
+          label: "Copy Link Address",
+          click: () => clipboard.writeText(params.linkURL)
+        },
+        { type: "separator" }
+      );
+    }
+
+    if (params.selectionText && params.selectionText.trim().length > 0) {
+      menuTemplate.push(
+        { role: "copy", label: "Copy" }
+      );
+    }
+
+    if (params.isEditable) {
+      if (menuTemplate.length > 0 && !params.selectionText) {
+        menuTemplate.push({ type: "separator" });
+      }
+      menuTemplate.push(
+        { role: "undo", label: "Undo" },
+        { role: "redo", label: "Redo" },
+        { type: "separator" },
+        { role: "cut", label: "Cut" },
+        { role: "copy", label: "Copy" },
+        { role: "paste", label: "Paste" },
+        { role: "delete", label: "Delete" },
+        { type: "separator" },
+        { role: "selectAll", label: "Select All" }
+      );
+    } else {
+      if (!params.selectionText && !params.linkURL) {
+        menuTemplate.push(
+          { role: "copy", label: "Copy" },
+          { role: "selectAll", label: "Select All" }
+        );
+      } else if (params.selectionText) {
+        menuTemplate.push(
+          { type: "separator" },
+          { role: "selectAll", label: "Select All" }
+        );
+      }
+    }
+
+    if (menuTemplate.length > 0) {
+      const contextMenu = Menu.buildFromTemplate(menuTemplate);
+      contextMenu.popup({ window: mainWindow });
     }
   });
 
@@ -660,7 +772,7 @@ function showMainWindow(reason = "user") {
       try {
         stopDockBounce();
         app.dock.show();
-      } catch (e) {}
+      } catch (e) { }
     }
     if (mainWindow.isMinimized()) {
       mainWindow.restore();
@@ -673,7 +785,7 @@ function showMainWindow(reason = "user") {
         if (app.focus) {
           app.focus({ steal: true });
         }
-      } catch (e) {}
+      } catch (e) { }
     } else {
       mainWindow.setAlwaysOnTop(true);
       mainWindow.focus();
@@ -750,7 +862,7 @@ function createMenu() {
         { role: "zoomOut" },
         { role: "resetZoom" },
         { type: "separator" },
-        { role: "toggleDevTools" }
+        { label: "Zoom", role: "resetZoom" }
       ]
     },
     {
@@ -896,14 +1008,14 @@ function configureAutoUpdater() {
   if (app.isPackaged && !autoUpdateCheckInterval) {
     autoUpdateCheckInterval = setInterval(() => {
       if (!isCallActiveInApp) {
-        checkForUpdates().catch(() => {});
+        checkForUpdates().catch(() => { });
       }
     }, 15 * 60 * 1000);
 
     // Initial check shortly after app start
     setTimeout(() => {
       if (!isCallActiveInApp) {
-        checkForUpdates().catch(() => {});
+        checkForUpdates().catch(() => { });
       }
     }, 10 * 1000);
   }
@@ -915,10 +1027,10 @@ function configureSession() {
   const defaultSession = session.defaultSession;
 
   // Clear stale HTTP and ServiceWorker caches on startup so desktop app always loads fresh code
-  defaultSession.clearCache().catch(() => {});
+  defaultSession.clearCache().catch(() => { });
   defaultSession.clearStorageData({
     storages: ["serviceworkers", "cachestorage", "shadercache"]
-  }).catch(() => {});
+  }).catch(() => { });
 
   defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
     const permitted = new Set([
@@ -1039,13 +1151,19 @@ function registerIpc() {
   ipcMain.handle("app:choose-files", () => chooseFiles(mainWindow));
   ipcMain.handle("app:read-clipboard", () => clipboard.readText());
   ipcMain.handle("app:write-clipboard", (_event, text) => clipboard.writeText(String(text ?? "")));
+  ipcMain.handle("app:open-external", (_event, rawUrl) => {
+    if (typeof rawUrl === "string" && rawUrl.trim()) {
+      shell.openExternal(rawUrl.trim());
+    }
+    return { ok: true };
+  });
   ipcMain.handle("app:notify", (_event, payload) => showNativeNotification(payload));
   ipcMain.handle("app:clear-notifications", (_event, type) => {
     stopDockBounce();
     for (const notification of activeNativeNotifications) {
       try {
         notification.close();
-      } catch (err) {}
+      } catch (err) { }
     }
     activeNativeNotifications.clear();
     return true;
@@ -1066,6 +1184,399 @@ function registerIpc() {
   ipcMain.handle("app:set-call-active", (_event, active) => {
     isCallActiveInApp = Boolean(active);
     return isCallActiveInApp;
+  });
+  function getPortalPartition(targetUrl = "") {
+    const urlLower = String(targetUrl || "").toLowerCase();
+    if (urlLower.includes("payg")) return "persist:portal_payg";
+    if (urlLower.includes("vitelmeet") || urlLower.includes("vmadmin")) return "persist:portal_vitelmeet";
+    if (urlLower.includes("omnichannel")) return "persist:portal_omnichannel";
+    if (urlLower.includes("bharatpayroll") || urlLower.includes("payroll")) return "persist:portal_bharatpayroll";
+    if (urlLower.includes("digitalemployees") || urlLower.includes("vitelai")) return "persist:portal_vitelai";
+    if (urlLower.includes("scancard")) return "persist:portal_scancard";
+    return "persist:portal_general";
+  }
+
+  function safeCookieVal(val) {
+    const s = String(val ?? "").trim();
+    if (/[\s;"\\,]/g.test(s)) {
+      return encodeURIComponent(s);
+    }
+    return s;
+  }
+
+  async function applyPortalSessionCookies(payload, targetSession = null) {
+    const { token, user, targetUrl } = payload || {};
+    if (!token || !user) return { ok: false, error: "Missing token or user" };
+
+    const fullName = (user.first_name || user.last_name)
+      ? `${user.first_name || ""} ${user.last_name || ""}`.trim()
+      : (user.full_name || user.auth_user || user.name || user.username || "User");
+
+    const userId = String(
+      (user.user_type === "sub_user" && user.sub_user_id)
+        ? user.sub_user_id
+        : (user.user_id || user.id || user.customer_id || "")
+    );
+
+    const email = user.email || user.email_id || user.customer_email || "";
+    const freshExpiry = String(Date.now() + (30 * 24 * 60 * 60 * 1000));
+    const freshTimeLeft = "2592000000";
+
+    const cookiesToSet = [
+      { name: "customer_user_token", value: safeCookieVal(token) },
+      { name: "user_token", value: safeCookieVal(token) },
+      { name: "w_token", value: safeCookieVal(token) },
+      { name: "auth_user", value: safeCookieVal(fullName || user.username || "") },
+      { name: "username", value: safeCookieVal(user.username || "") },
+      { name: "email", value: safeCookieVal(email) },
+      { name: "user_type", value: safeCookieVal(user.user_type || "customer") },
+      { name: "user_id", value: safeCookieVal(userId) },
+      { name: "customer_id", value: safeCookieVal(userId) },
+      { name: "company_name", value: safeCookieVal(user.company_name || "") },
+      { name: "full_name", value: safeCookieVal(fullName) },
+      { name: "agreement_signed", value: "true" },
+      { name: "type", value: "whatsapp" },
+      { name: "logout_expiration_time", value: freshExpiry },
+      { name: "logout_time_left", value: freshTimeLeft }
+    ];
+
+    if (user.profile_photo_url && user.profile_photo_url !== "undefined") {
+      cookiesToSet.push({ name: "profile_photo_url", value: safeCookieVal(user.profile_photo_url) });
+    }
+
+    const expires = Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60);
+    const origins = [
+      "https://payg.vitelglobal.com",
+      "https://vitelmeet.vitelglobal.com",
+      "https://omnichannel.vitelglobal.com",
+      "https://vmadmin.vitelglobal.com"
+    ];
+
+    const part = getPortalPartition(targetUrl);
+    const activeSession = targetSession || session.fromPartition(part);
+
+    for (const origin of origins) {
+      for (const c of cookiesToSet) {
+        if (!c.value) continue;
+        // 1. Set domain cookie on .vitelglobal.com in isolated session
+        try {
+          await activeSession.cookies.set({
+            url: origin,
+            domain: ".vitelglobal.com",
+            path: "/",
+            name: c.name,
+            value: c.value,
+            secure: true,
+            sameSite: "lax",
+            expirationDate: expires
+          });
+        } catch (e1) {
+          log.warn(`[Electron] Domain cookie set warning for ${c.name}:`, e1?.message);
+        }
+        // 2. Set host-only cookie on specific origin in isolated session
+        try {
+          await activeSession.cookies.set({
+            url: origin,
+            path: "/",
+            name: c.name,
+            value: c.value,
+            secure: true,
+            sameSite: "lax",
+            expirationDate: expires
+          });
+        } catch (e2) {
+          log.warn(`[Electron] Host cookie set warning for ${c.name}:`, e2?.message);
+        }
+      }
+    }
+
+    if (targetUrl.toLowerCase().includes("bharatpayroll") || targetUrl.toLowerCase().includes("payroll")) {
+      try {
+        await activeSession.cookies.set({
+          url: "https://tradein.bharatpayroll.com",
+          path: "/",
+          name: "access",
+          value: safeCookieVal(token),
+          secure: true,
+          sameSite: "lax",
+          expirationDate: expires
+        });
+        await activeSession.cookies.set({
+          url: "https://tradein.bharatpayroll.com",
+          path: "/",
+          name: "refresh",
+          value: safeCookieVal(user?.refreshToken || token),
+          secure: true,
+          sameSite: "lax",
+          expirationDate: expires
+        });
+      } catch (ePayroll) {
+        log.warn("[Electron] Bharat payroll cookie set error:", ePayroll?.message);
+      }
+    }
+
+    if (targetUrl.toLowerCase().includes("digitalemployees") || targetUrl.toLowerCase().includes("vitelai")) {
+      try {
+        await activeSession.cookies.set({
+          url: "https://digitalemployees.vitelglobal.com",
+          path: "/",
+          name: "access_token",
+          value: safeCookieVal(token),
+          secure: true,
+          sameSite: "lax",
+          expirationDate: expires
+        });
+        await activeSession.cookies.set({
+          url: "https://digitalemployees.vitelglobal.com",
+          path: "/",
+          name: "session_token",
+          value: safeCookieVal(user?.session_token || token),
+          secure: true,
+          sameSite: "lax",
+          expirationDate: expires
+        });
+      } catch (eAI) {
+        log.warn("[Electron] Vitel AI cookie set error:", eAI?.message);
+      }
+    }
+
+    await activeSession.cookies.flushStore().catch(() => { });
+    log.info(`[Electron] Successfully set persistent portal cookies for ${part}`);
+    return { ok: true, cookiesToSet };
+  }
+
+  ipcMain.handle("app:set-vitelmeet-session", async (_event, payload) => {
+    try {
+      const part = getPortalPartition(payload?.targetUrl || payload?.url || "");
+      const portalSession = session.fromPartition(part);
+      return await applyPortalSessionCookies(payload, portalSession);
+    } catch (err) {
+      log.error("[Electron] Failed to set portal cookies:", err);
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle("app:clear-portal-cookies", async (_event, targetPortal) => {
+    try {
+      const partitions = targetPortal
+        ? [getPortalPartition(targetPortal)]
+        : ["persist:portal_payg", "persist:portal_vitelmeet", "persist:portal_omnichannel", "persist:portal_general", "persist:vitel_portals"];
+      for (const part of partitions) {
+        const s = session.fromPartition(part);
+        await s.clearStorageData({ storages: ["cookies", "localstorage"] }).catch(() => {});
+      }
+      log.info("[Electron] Cleared portal session cookies & storage data for partitions:", partitions);
+      return { ok: true };
+    } catch (err) {
+      log.error("[Electron] Failed to clear portal cookies:", err);
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle("app:open-portal", async (_event, payload) => {
+    try {
+      const url = typeof payload === "string" ? payload : payload?.url;
+      const targetUrl = (typeof payload === "object" && payload?.targetUrl) ? payload.targetUrl : url;
+      const title = (typeof payload === "object" && payload?.title) ? payload.title : "VitelGlobal Portal";
+      if (!url && !targetUrl) return { ok: false, error: "Missing URL" };
+
+      // Resolve the actual destination portal URL directly (prevent any redirection to dbchat / sso-handoff)
+      let finalUrl = targetUrl || url;
+      if (finalUrl && finalUrl.includes("sso-handoff")) {
+        try {
+          const parsed = new URL(finalUrl);
+          const extracted = parsed.searchParams.get("target");
+          if (extracted) finalUrl = extracted;
+        } catch (_) {}
+      }
+
+      const destination = new URL(finalUrl);
+      if (!["https:", "http:"].includes(destination.protocol) || destination.username || destination.password) {
+        return { ok: false, error: "Invalid portal URL" };
+      }
+
+      // ISOLATED PARTITION PER PORTAL:
+      // Pay As You Go: persist:portal_payg
+      // VitelMeet: persist:portal_vitelmeet
+      // Omnichannel: persist:portal_omnichannel
+      // This ensures complete separation so portals never overwrite or interfere with each other!
+      const partitionName = getPortalPartition(finalUrl);
+      const portalSession = session.fromPartition(partitionName);
+
+      // Ensure fresh cookies are installed in isolated portalSession before opening
+      if (typeof payload === "object" && payload?.token && payload?.user) {
+        try {
+          await applyPortalSessionCookies({ token: payload.token, user: payload.user, targetUrl: finalUrl }, portalSession);
+        } catch (_) {}
+      }
+
+      // If an existing window for this portal is already open, reload it with fresh cookies and bring to front
+      let existingWin;
+      try {
+        const parsedTarget = new URL(finalUrl);
+        existingWin = BrowserWindow.getAllWindows().find((w) => {
+          if (w === mainWindow || w.isDestroyed()) return false;
+          try {
+            return w.__vitelPortalOrigin === parsedTarget.origin && w.webContents.session === portalSession;
+          } catch { }
+          return false;
+        });
+
+        if (existingWin) {
+          existingWin.show();
+          existingWin.focus();
+          existingWin.__disposePortalLogin?.();
+        }
+      } catch (checkErr) {
+        log.warn("[Electron] Error checking existing portal window:", checkErr?.message);
+      }
+
+      const portalWin = existingWin || new BrowserWindow({
+        width: 1366,
+        height: 850,
+        minWidth: 900,
+        minHeight: 600,
+        title,
+        autoHideMenuBar: true,
+        show: false,
+        webPreferences: {
+          session: portalSession,
+          nodeIntegration: false,
+          contextIsolation: true
+        }
+      });
+
+      portalWin.__vitelPortalOrigin = destination.origin;
+      const cleanup = [];
+      portalWin.__disposePortalLogin = () => {
+        while (cleanup.length > 0) {
+          const dispose = cleanup.shift();
+          try {
+            if (typeof dispose === "function") {
+              dispose();
+            }
+          } catch (_) {}
+        }
+      };
+
+      if (!existingWin) portalWin.once("ready-to-show", () => {
+        portalWin.show();
+        portalWin.focus();
+      });
+
+      if (!existingWin) portalWin.on("closed", () => {
+        try {
+          portalWin.__disposePortalLogin?.();
+        } catch (_) {}
+      });
+
+      // Synchronize storage on the destination origin; the form helper also
+      // handles applications whose login UI mounts after these load events.
+      if (typeof payload === "object" && payload?.token) {
+        const injectCredentials = () => {
+          try {
+            const curUrl = portalWin.webContents.getURL();
+            if (curUrl && new URL(curUrl).origin === destination.origin) {
+              const u = payload.user || {};
+              const fn = (u.first_name || u.last_name) ? `${u.first_name || ""} ${u.last_name || ""}`.trim() : (u.full_name || u.auth_user || u.username || "User");
+              const cid = String(u.customer_id || u.user_id || u.id || "");
+              const freshExp = String(Date.now() + (30 * 24 * 60 * 60 * 1000));
+              const cookiesMap = {
+                user_token: String(payload.token),
+                customer_user_token: String(payload.token),
+                w_token: String(payload.token),
+                auth_user: fn,
+                customer_id: cid,
+                user_id: cid,
+                company_name: String(u.company_name || ""),
+                user_type: String(u.user_type || "customer"),
+                username: String(u.username || ""),
+                full_name: fn,
+                email: String(u.email || u.email_id || ""),
+                agreement_signed: "true",
+                type: "whatsapp",
+                logout_expiration_time: freshExp,
+                logout_time_left: "2592000000"
+              };
+              const jsCode = `
+                (function() {
+                  try {
+                    if (window.location.origin !== ${JSON.stringify(destination.origin)}) return;
+                    var m = ${JSON.stringify(cookiesMap)};
+                    for (var k in m) {
+                      if (m[k]) {
+                        document.cookie = k + "=" + encodeURIComponent(m[k]) + "; path=/; domain=.vitelglobal.com; max-age=2592000; SameSite=Lax; Secure";
+                        document.cookie = k + "=" + encodeURIComponent(m[k]) + "; path=/; max-age=2592000; SameSite=Lax; Secure";
+                        try { localStorage.setItem(k, m[k]); } catch(e2) {}
+                        try { sessionStorage.setItem(k, m[k]); } catch(e3) {}
+                      }
+                    }
+                    if (window.location.origin.includes("bharatpayroll")) {
+                      try {
+                        localStorage.setItem("access", ${JSON.stringify(payload.token)});
+                        localStorage.setItem("refresh", ${JSON.stringify(payload.user?.refreshToken || payload.token)});
+                        localStorage.setItem("token", ${JSON.stringify(payload.token)});
+                      } catch(e4) {}
+                    }
+                    if (window.location.origin.includes("digitalemployees")) {
+                      try {
+                        localStorage.setItem("access_token", ${JSON.stringify(payload.token)});
+                        localStorage.setItem("session_token", ${JSON.stringify(payload.user?.session_token || payload.token)});
+                      } catch(e5) {}
+                    }
+                  } catch(e) {}
+                })();
+              `;
+              portalWin.webContents.executeJavaScript(jsCode).catch(() => {});
+            }
+          } catch (_) {}
+        };
+
+        portalWin.webContents.on("dom-ready", injectCredentials);
+        portalWin.webContents.on("did-finish-load", injectCredentials);
+        cleanup.push(() => {
+          try {
+            if (!portalWin.isDestroyed() && !portalWin.webContents?.isDestroyed()) {
+              portalWin.webContents.removeListener("dom-ready", injectCredentials);
+              portalWin.webContents.removeListener("did-finish-load", injectCredentials);
+            }
+          } catch (_) {}
+        });
+      }
+
+      cleanup.push(attachPortalAutoLogin(portalWin.webContents, {
+        targetUrl: finalUrl,
+        username: payload?.credentials?.username || payload?.user?.username || payload?.username || "",
+        password: payload?.credentials?.password || payload?.password || "",
+      }));
+
+      portalWin.webContents.setWindowOpenHandler(({ url: childUrl }) => {
+        if (isTrustedUrl(childUrl)) {
+          return {
+            action: "allow",
+            overrideBrowserWindowOptions: {
+              width: 1366,
+              height: 850,
+              show: true,
+              autoHideMenuBar: true,
+              webPreferences: {
+                session: portalSession,
+                nodeIntegration: false,
+                contextIsolation: true
+              }
+            }
+          };
+        }
+        shell.openExternal(childUrl);
+        return { action: "deny" };
+      });
+
+      await portalWin.loadURL(finalUrl);
+      return { ok: true };
+    } catch (err) {
+      log.error("[Electron] Failed to open portal window:", err);
+      return { ok: false, error: err.message };
+    }
   });
   ipcMain.handle("app:get-location", async () => {
     try {
@@ -1091,7 +1602,7 @@ function registerIpc() {
                 });
                 return;
               }
-            } catch {}
+            } catch { }
             resolve(null);
           });
         });
@@ -1113,93 +1624,93 @@ function registerIpc() {
     });
     return app.getLoginItemSettings().openAtLogin;
   });
-const DIGITS_4x6 = {
-  '0': [0b1111, 0b1001, 0b1001, 0b1001, 0b1001, 0b1111],
-  '1': [0b0110, 0b0010, 0b0010, 0b0010, 0b0010, 0b0111],
-  '2': [0b1111, 0b0001, 0b1111, 0b1000, 0b1000, 0b1111],
-  '3': [0b1111, 0b0001, 0b1111, 0b0001, 0b0001, 0b1111],
-  '4': [0b1001, 0b1001, 0b1111, 0b0001, 0b0001, 0b0001],
-  '5': [0b1111, 0b1000, 0b1111, 0b0001, 0b0001, 0b1111],
-  '6': [0b1111, 0b1000, 0b1111, 0b1001, 0b1001, 0b1111],
-  '7': [0b1111, 0b0001, 0b0010, 0b0010, 0b0100, 0b0100],
-  '8': [0b1111, 0b1001, 0b1111, 0b1001, 0b1001, 0b1111],
-  '9': [0b1111, 0b1001, 0b1111, 0b0001, 0b0001, 0b1111],
-  '+': [0b0000, 0b0100, 0b1110, 0b0100, 0b0000, 0b0000]
-};
+  const DIGITS_4x6 = {
+    '0': [0b1111, 0b1001, 0b1001, 0b1001, 0b1001, 0b1111],
+    '1': [0b0110, 0b0010, 0b0010, 0b0010, 0b0010, 0b0111],
+    '2': [0b1111, 0b0001, 0b1111, 0b1000, 0b1000, 0b1111],
+    '3': [0b1111, 0b0001, 0b1111, 0b0001, 0b0001, 0b1111],
+    '4': [0b1001, 0b1001, 0b1111, 0b0001, 0b0001, 0b0001],
+    '5': [0b1111, 0b1000, 0b1111, 0b0001, 0b0001, 0b1111],
+    '6': [0b1111, 0b1000, 0b1111, 0b1001, 0b1001, 0b1111],
+    '7': [0b1111, 0b0001, 0b0010, 0b0010, 0b0100, 0b0100],
+    '8': [0b1111, 0b1001, 0b1111, 0b1001, 0b1001, 0b1111],
+    '9': [0b1111, 0b1001, 0b1111, 0b0001, 0b0001, 0b1111],
+    '+': [0b0000, 0b0100, 0b1110, 0b0100, 0b0000, 0b0000]
+  };
 
-function createWindowsBadgeImage(count) {
-  try {
-    const width = 32;
-    const height = 32;
-    const buf = Buffer.alloc(width * height * 4);
-    const cx = 16, cy = 16, radius = 14;
+  function createWindowsBadgeImage(count) {
+    try {
+      const width = 32;
+      const height = 32;
+      const buf = Buffer.alloc(width * height * 4);
+      const cx = 16, cy = 16, radius = 14;
 
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const offset = (y * width + x) * 4;
-        const dx = x - cx + 0.5;
-        const dy = y - cy + 0.5;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const offset = (y * width + x) * 4;
+          const dx = x - cx + 0.5;
+          const dy = y - cy + 0.5;
+          const dist = Math.sqrt(dx * dx + dy * dy);
 
-        if (dist <= radius) {
-          if (dist >= radius - 2) {
-            buf[offset] = 255;
-            buf[offset + 1] = 255;
-            buf[offset + 2] = 255;
-            buf[offset + 3] = 255;
-          } else {
-            buf[offset] = 220;
-            buf[offset + 1] = 38;
-            buf[offset + 2] = 38;
-            buf[offset + 3] = 255;
+          if (dist <= radius) {
+            if (dist >= radius - 2) {
+              buf[offset] = 255;
+              buf[offset + 1] = 255;
+              buf[offset + 2] = 255;
+              buf[offset + 3] = 255;
+            } else {
+              buf[offset] = 220;
+              buf[offset + 1] = 38;
+              buf[offset + 2] = 38;
+              buf[offset + 3] = 255;
+            }
           }
         }
       }
-    }
 
-    const text = count > 99 ? "99+" : String(count);
-    const scale = text.length === 1 ? 2 : (text.length === 2 ? 2 : 1);
-    const charWidth = 4 * scale;
-    const charHeight = 6 * scale;
-    const spacing = 1 * scale;
-    const totalTextWidth = text.length * charWidth + (text.length - 1) * spacing;
-    const startX = Math.round(cx - totalTextWidth / 2);
-    const startY = Math.round(cy - charHeight / 2);
+      const text = count > 99 ? "99+" : String(count);
+      const scale = text.length === 1 ? 2 : (text.length === 2 ? 2 : 1);
+      const charWidth = 4 * scale;
+      const charHeight = 6 * scale;
+      const spacing = 1 * scale;
+      const totalTextWidth = text.length * charWidth + (text.length - 1) * spacing;
+      const startX = Math.round(cx - totalTextWidth / 2);
+      const startY = Math.round(cy - charHeight / 2);
 
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-      const bitmap = DIGITS_4x6[ch] || DIGITS_4x6['0'];
-      const curX = startX + i * (charWidth + spacing);
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        const bitmap = DIGITS_4x6[ch] || DIGITS_4x6['0'];
+        const curX = startX + i * (charWidth + spacing);
 
-      for (let row = 0; row < 6; row++) {
-        const rowBits = bitmap[row];
-        for (let col = 0; col < 4; col++) {
-          const isSet = (rowBits >> (3 - col)) & 1;
-          if (isSet) {
-            for (let sy = 0; sy < scale; sy++) {
-              for (let sx = 0; sx < scale; sx++) {
-                const px = curX + col * scale + sx;
-                const py = startY + row * scale + sy;
-                if (px >= 0 && px < width && py >= 0 && py < height) {
-                  const offset = (py * width + px) * 4;
-                  buf[offset] = 255;
-                  buf[offset + 1] = 255;
-                  buf[offset + 2] = 255;
-                  buf[offset + 3] = 255;
+        for (let row = 0; row < 6; row++) {
+          const rowBits = bitmap[row];
+          for (let col = 0; col < 4; col++) {
+            const isSet = (rowBits >> (3 - col)) & 1;
+            if (isSet) {
+              for (let sy = 0; sy < scale; sy++) {
+                for (let sx = 0; sx < scale; sx++) {
+                  const px = curX + col * scale + sx;
+                  const py = startY + row * scale + sy;
+                  if (px >= 0 && px < width && py >= 0 && py < height) {
+                    const offset = (py * width + px) * 4;
+                    buf[offset] = 255;
+                    buf[offset + 1] = 255;
+                    buf[offset + 2] = 255;
+                    buf[offset + 3] = 255;
+                  }
                 }
               }
             }
           }
         }
       }
-    }
 
-    return nativeImage.createFromBitmap(buf, { width, height });
-  } catch (err) {
-    log.error("[Electron] Failed to generate dynamic badge image:", err);
-    return null;
+      return nativeImage.createFromBitmap(buf, { width, height });
+    } catch (err) {
+      log.error("[Electron] Failed to generate dynamic badge image:", err);
+      return null;
+    }
   }
-}
 
   ipcMain.handle("app:set-badge-count", (_event, count) => {
     const safeCount = Number.isFinite(Number(count)) ? Math.max(0, Number(count)) : 0;
@@ -1235,6 +1746,16 @@ function createWindowsBadgeImage(count) {
         await session.defaultSession.clearStorageData({
           storages: ["cookies", "localstorage", "websql", "indexdb", "serviceworkers", "cachestorage"]
         });
+      }
+      // Also thoroughly purge all portal partitions on logout
+      const portalPartitions = ["persist:portal_payg", "persist:portal_vitelmeet", "persist:portal_omnichannel"];
+      for (const part of portalPartitions) {
+        try {
+          const partSession = session.fromPartition(part);
+          await partSession.clearStorageData({
+            storages: ["cookies", "localstorage", "websql", "indexdb", "serviceworkers", "cachestorage"]
+          });
+        } catch (_) {}
       }
       sqliteDb.clearSession();
       return true;
@@ -1320,6 +1841,23 @@ app.whenReady().then(async () => {
     return;
   }
 
+  // Ensure macOS users run the app from /Applications to avoid App Translocation TCC permission loss
+  if (process.platform === "darwin" && app.isPackaged) {
+    if (typeof app.isInApplicationsFolder === "function" && !app.isInApplicationsFolder()) {
+      try {
+        const moved = app.moveToApplicationsFolder({
+          conflictHandler: () => true
+        });
+        if (moved) {
+          log.info("App moved to Applications folder and relaunching.");
+          return;
+        }
+      } catch (err) {
+        log.warn("app.moveToApplicationsFolder failed or declined:", err);
+      }
+    }
+  }
+
   registerWindowsNotificationShortcut();
 
   // Pre-request macOS System Media Permissions once at startup
@@ -1363,22 +1901,7 @@ app.whenReady().then(async () => {
   createSplashWindow();
   await createMainWindow();
 
-  globalShortcut.register("CommandOrControl+Shift+V", () => {
-    if (mainWindow?.isVisible()) {
-      mainWindow.hide();
-    } else {
-      showMainWindow();
-    }
-  });
-
-  log.info(`${APP_NAME} started`, {
-    version: app.getVersion(),
-    electron: process.versions.electron,
-    chrome: process.versions.chrome,
-    node: process.versions.node,
-    os: `${os.type()} ${os.release()}`
-  });
-}).catch((err) => {
+  // globalShortcut.register("CommandOrControl+Shift+V") removed).catch((err) => {
   log.error("Fatal startup error in app.whenReady:", err);
 });
 
