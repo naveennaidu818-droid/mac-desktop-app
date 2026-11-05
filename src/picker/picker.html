@@ -1,3 +1,28 @@
 <!doctype html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'"><title>Choose what to share</title><link rel="stylesheet" href="picker.css"></head>
-<body><header><h1>Choose what to share</h1><button id="cancel">Cancel</button></header><p>Choose a screen or window. When requested, Windows also shares system audio.</p><main id="sources"></main><script src="picker.js"></script></body></html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'">
+  <title>Choose what to share - VitelGlobal</title>
+  <link rel="stylesheet" href="picker.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Choose what to share</h1>
+      <p class="subtitle">Select a screen or application window to share in your meeting</p>
+    </div>
+    <button id="cancel" class="cancel-btn">Cancel</button>
+  </header>
+
+  <nav class="tabs">
+    <button id="tab-screens" class="tab-btn active">Entire Screen</button>
+    <button id="tab-windows" class="tab-btn">Window</button>
+  </nav>
+
+  <main id="sources" class="sources-grid"></main>
+
+  <script src="picker.js"></script>
+</body>
+</html>
