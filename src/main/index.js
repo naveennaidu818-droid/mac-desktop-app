@@ -1123,32 +1123,32 @@ function finishCapture(source) {
   if (captureWindow && !captureWindow.isDestroyed()) {
     captureWindow.destroy();
   }
-  const streamPayload = source
-    ? {
-        video: source,
-        ...(request.audio && process.platform === "win32" ? { audio: "loopback" } : {})
-      }
-    : null;
-  request.respond(streamPayload);
+  request.respond(source ? {
+    video: source,
+    ...(request.audio && process.platform === "win32" ? { audio: "loopback" } : {})
+  } : null);
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.focus();
   }
 }
 
-function showCapturePicker(sources, respond, audio) {
+function showCapturePicker(sources, respond, audio, ownerWindow) {
   if (capturePickerWin && !capturePickerWin.isDestroyed()) {
     capturePickerWin.focus();
     return;
   }
+  const parentWin = (ownerWindow && !ownerWindow.isDestroyed())
+    ? ownerWindow
+    : (BrowserWindow.getFocusedWindow() || mainWindow || undefined);
+
   capturePickerWin = new BrowserWindow({
+    parent: parentWin || undefined,
+    modal: Boolean(parentWin),
     width: 860,
     height: 620,
     minWidth: 500,
     minHeight: 400,
     title: "Choose what to share",
-    alwaysOnTop: true,
-    center: true,
-    skipTaskbar: false,
     autoHideMenuBar: true,
     backgroundColor: "#ffffff",
     webPreferences: {
@@ -1158,9 +1158,7 @@ function showCapturePicker(sources, respond, audio) {
       sandbox: true
     }
   });
-  capturePickerWin.setAlwaysOnTop(true, "screen-saver");
   capturePickerWin.removeMenu();
-  capturePickerWin.focus();
   pendingCapture = {
     sources,
     respond,
@@ -1232,11 +1230,7 @@ function configureSession() {
         if (answered) return;
         answered = true;
         try {
-          if (stream) {
-            callback(stream);
-          } else {
-            callback();
-          }
+          callback(stream);
         } catch (_) {}
       };
 
@@ -1262,16 +1256,21 @@ function configureSession() {
             type: "info",
             title: "No Screens Available",
             message: "No screens or windows are available to share.",
-            detail: "Make sure the window you want to share is open and not minimized, and verify macOS Screen Recording permissions."
+            detail: "Make sure the window you want to share is open and not minimized, and verify operating system screen recording permissions."
           }).catch(() => {});
           return;
         }
-        showCapturePicker(sources, respond, request.audioRequested);
+
+        const ownerWindow = (request.frame && BrowserWindow.fromWebContents(request.frame.webContents))
+          || BrowserWindow.getFocusedWindow()
+          || mainWindow;
+
+        showCapturePicker(sources, respond, request.audioRequested, ownerWindow);
       } catch (error) {
         log.error("Display media request failed", error);
         respond(null);
       }
-    });
+    }, { useSystemPicker: true });
   }
 
   defaultSession.webRequest.onHeadersReceived((details, callback) => {
