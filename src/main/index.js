@@ -1834,12 +1834,7 @@ function registerIpc() {
 
   ipcMain.handle("app:clear-all-data", async () => {
     try {
-      if (session?.defaultSession) {
-        await session.defaultSession.clearStorageData({
-          storages: ["cookies", "localstorage", "websql", "indexdb", "serviceworkers", "cachestorage"]
-        });
-      }
-      // Also thoroughly purge all portal partitions on logout
+      // Purge all external portal partitions on logout so credentials don't leak
       const portalPartitions = ["persist:portal_payg", "persist:portal_vitelmeet", "persist:portal_omnichannel"];
       for (const part of portalPartitions) {
         try {
