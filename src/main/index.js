@@ -20,7 +20,8 @@ const {
   crashReporter,
   systemPreferences,
   protocol,
-  net
+  net,
+  desktopCapturer
 } = require("electron");
 const log = require("electron-log/main");
 const sqliteDb = require("./database");
@@ -1115,6 +1116,79 @@ function configureAutoUpdater() {
   return autoUpdater;
 }
 
+const PICKER_HTML = path.join(__dirname, "..", "picker", "picker.html");
+let capturePickerWin = null;
+let pendingCapture = null;
+
+function finishCapture(source) {
+  if (!pendingCapture) return;
+  const request = pendingCapture;
+  pendingCapture = null;
+  clearTimeout(request.timer);
+  const captureWindow = capturePickerWin;
+  capturePickerWin = null;
+  if (captureWindow && !captureWindow.isDestroyed()) {
+    captureWindow.destroy();
+  }
+  const streamPayload = source
+    ? {
+        video: source,
+        ...(request.audio && process.platform === "win32" ? { audio: "loopback" } : {})
+      }
+    : {};
+  request.respond(streamPayload);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.focus();
+  }
+}
+
+function showCapturePicker(sources, respond, audio) {
+  if (capturePickerWin && !capturePickerWin.isDestroyed()) {
+    capturePickerWin.focus();
+    return;
+  }
+  capturePickerWin = new BrowserWindow({
+    parent: mainWindow || undefined,
+    modal: Boolean(mainWindow),
+    width: 860,
+    height: 620,
+    minWidth: 500,
+    minHeight: 400,
+    title: "Choose what to share",
+    autoHideMenuBar: true,
+    backgroundColor: "#ffffff",
+    webPreferences: {
+      preload: path.join(__dirname, "..", "picker", "picker-preload.cjs"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true
+    }
+  });
+  capturePickerWin.removeMenu();
+  pendingCapture = {
+    sources,
+    respond,
+    audio,
+    timer: setTimeout(() => finishCapture(null), 60000)
+  };
+  capturePickerWin.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  capturePickerWin.webContents.on("will-navigate", (event) => event.preventDefault());
+  capturePickerWin.webContents.once("did-finish-load", () => {
+    if (capturePickerWin && !capturePickerWin.isDestroyed()) {
+      capturePickerWin.webContents.send(
+        "sources",
+        sources.map((source) => ({
+          id: source.id,
+          name: source.name,
+          thumbnail: source.thumbnail.toDataURL()
+        }))
+      );
+    }
+  });
+  capturePickerWin.on("closed", () => finishCapture(null));
+  void capturePickerWin.loadFile(PICKER_HTML).catch(() => finishCapture(null));
+}
+
 function configureSession() {
   const defaultSession = session.defaultSession;
 
@@ -1156,18 +1230,48 @@ function configureSession() {
   });
 
   if (typeof defaultSession.setDisplayMediaRequestHandler === "function") {
-    defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+    defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+      let answered = false;
+      const respond = (stream) => {
+        if (answered) return;
+        answered = true;
+        try {
+          callback(stream || {});
+        } catch (_) {}
+      };
+
+      if (process.platform === "darwin" && systemPreferences.getMediaAccessStatus?.("screen") === "denied") {
+        respond(null);
+        dialog.showMessageBox({
+          type: "warning",
+          title: "Screen Recording Permission Required",
+          message: "Screen recording permission is blocked by macOS.",
+          detail: "Please allow VitelGlobal Desktop in System Settings > Privacy & Security > Screen & System Audio Recording, then restart and rejoin your meeting."
+        }).catch(() => {});
+        return;
+      }
+
       try {
         const sources = await desktopCapturer.getSources({
           types: ["screen", "window"],
           thumbnailSize: { width: 320, height: 180 }
         });
-        callback(sources[0] ? { video: sources[0], audio: "loopback" } : {});
+        if (!sources.length) {
+          respond(null);
+          dialog.showMessageBox({
+            type: "info",
+            title: "No Screens Available",
+            message: "No screens or windows are available to share.",
+            detail: "Make sure the window you want to share is open and not minimized, and verify macOS Screen Recording permissions."
+          }).catch(() => {});
+          return;
+        }
+        showCapturePicker(sources, respond, request.audioRequested);
       } catch (error) {
         log.error("Display media request failed", error);
-        callback({});
+        respond(null);
       }
-    }, { useSystemPicker: true });
+    });
   }
 
   defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -1213,6 +1317,21 @@ function handleDeepLink(rawUrl) {
 }
 
 function registerIpc() {
+  ipcMain.handle("select-source", async (event, id) => {
+    if (!capturePickerWin || event.sender !== capturePickerWin.webContents) {
+      return { ok: false };
+    }
+    if (!pendingCapture) return { ok: false };
+    if (id === null) {
+      finishCapture(null);
+      return { ok: true };
+    }
+    const source = pendingCapture.sources.find((value) => value.id === id);
+    if (!source) return { ok: false };
+    finishCapture(source);
+    return { ok: true };
+  });
+
   ipcMain.handle("app:get-info", () => ({
     name: APP_NAME,
     version: app.getVersion(),
