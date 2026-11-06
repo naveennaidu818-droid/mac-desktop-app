@@ -1127,7 +1127,11 @@ function finishCapture(source) {
     video: source,
     ...(request.audio && process.platform === "win32" ? { audio: "loopback" } : {})
   } : null);
-  if (mainWindow && !mainWindow.isDestroyed()) {
+
+  // Restore focus to the window that initiated screen sharing (e.g., meeting window)
+  if (request.ownerWindow && !request.ownerWindow.isDestroyed()) {
+    request.ownerWindow.focus();
+  } else if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.focus();
   }
 }
@@ -1141,9 +1145,11 @@ function showCapturePicker(sources, respond, audio, ownerWindow) {
     ? ownerWindow
     : (BrowserWindow.getFocusedWindow() || mainWindow || undefined);
 
+  const isModal = Boolean(parentWin);
   capturePickerWin = new BrowserWindow({
     parent: parentWin || undefined,
-    modal: Boolean(parentWin),
+    modal: isModal,
+    alwaysOnTop: !isModal,
     width: 860,
     height: 620,
     minWidth: 500,
@@ -1163,6 +1169,7 @@ function showCapturePicker(sources, respond, audio, ownerWindow) {
     sources,
     respond,
     audio,
+    ownerWindow: parentWin,
     timer: setTimeout(() => finishCapture(null), 60000)
   };
   capturePickerWin.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -1183,16 +1190,10 @@ function showCapturePicker(sources, respond, audio, ownerWindow) {
   void capturePickerWin.loadFile(PICKER_HTML).catch(() => finishCapture(null));
 }
 
-function configureSession() {
-  const defaultSession = session.defaultSession;
+function configureMediaAndPermissions(targetSession) {
+  if (!targetSession) return;
 
-  // Clear stale HTTP and ServiceWorker caches on startup so desktop app always loads fresh code
-  defaultSession.clearCache().catch(() => { });
-  defaultSession.clearStorageData({
-    storages: ["serviceworkers", "cachestorage", "shadercache"]
-  }).catch(() => { });
-
-  defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+  targetSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
     const permitted = new Set([
       "media",
       "microphone",
@@ -1209,7 +1210,7 @@ function configureSession() {
     callback(permitted.has(permission));
   });
 
-  defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+  targetSession.setPermissionCheckHandler((_webContents, permission) => {
     return [
       "media",
       "microphone",
@@ -1223,15 +1224,20 @@ function configureSession() {
     ].includes(permission);
   });
 
-  if (typeof defaultSession.setDisplayMediaRequestHandler === "function") {
-    defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+  if (typeof targetSession.setDisplayMediaRequestHandler === "function") {
+    targetSession.setDisplayMediaRequestHandler(async (request, callback) => {
       let answered = false;
       const respond = (stream) => {
         if (answered) return;
         answered = true;
         try {
           callback(stream);
-        } catch (_) {}
+        } catch (cbErr) {
+          log.error("Failed to callback displayMedia:", cbErr);
+          try {
+            callback(null);
+          } catch (_) {}
+        }
       };
 
       if (process.platform === "darwin" && systemPreferences.getMediaAccessStatus?.("screen") === "denied") {
@@ -1261,17 +1267,35 @@ function configureSession() {
           return;
         }
 
-        const ownerWindow = (request.frame && BrowserWindow.fromWebContents(request.frame.webContents))
-          || BrowserWindow.getFocusedWindow()
-          || mainWindow;
+        let ownerWindow = null;
+        try {
+          if (request.frame && typeof BrowserWindow.fromWebFrameMain === "function") {
+            ownerWindow = BrowserWindow.fromWebFrameMain(request.frame);
+          }
+        } catch (_) {}
+        if (!ownerWindow || ownerWindow.isDestroyed()) {
+          ownerWindow = BrowserWindow.getFocusedWindow() || mainWindow;
+        }
 
         showCapturePicker(sources, respond, request.audioRequested, ownerWindow);
       } catch (error) {
         log.error("Display media request failed", error);
         respond(null);
       }
-    }, { useSystemPicker: true });
+    });
   }
+}
+
+function configureSession() {
+  const defaultSession = session.defaultSession;
+
+  // Clear stale HTTP and ServiceWorker caches on startup so desktop app always loads fresh code
+  defaultSession.clearCache().catch(() => { });
+  defaultSession.clearStorageData({
+    storages: ["serviceworkers", "cachestorage", "shadercache"]
+  }).catch(() => { });
+
+  configureMediaAndPermissions(defaultSession);
 
   defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const headers = { ...details.responseHeaders };
@@ -1612,6 +1636,7 @@ function registerIpc() {
       // This ensures complete separation so portals never overwrite or interfere with each other!
       const partitionName = getPortalPartition(finalUrl);
       const portalSession = session.fromPartition(partitionName);
+      configureMediaAndPermissions(portalSession);
 
       // Ensure fresh cookies are installed in isolated portalSession before opening
       if (typeof payload === "object" && payload?.token && payload?.user) {
