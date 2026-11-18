@@ -4,20 +4,22 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const rootDir = path.resolve(__dirname, "..");
+const chatAppDist = path.resolve(rootDir, "..", "chat-app", "frontend", "dist");
 const webAppDist = path.resolve(rootDir, "..", "web-app", "dist");
+const sourceDist = fs.existsSync(path.join(chatAppDist, "index.html")) ? chatAppDist : webAppDist;
 const targetDist = path.resolve(rootDir, "src", "app-dist");
 
-console.log("[sync-app-dist] Starting sync from:", webAppDist);
+console.log("[sync-app-dist] Starting sync from:", sourceDist);
 console.log("[sync-app-dist] Target directory:", targetDist);
 
-if (!fs.existsSync(webAppDist)) {
-  console.error("[sync-app-dist] ERROR: web-app/dist does not exist! Please run 'npm run build' in web-app first.");
+if (!fs.existsSync(sourceDist)) {
+  console.error("[sync-app-dist] ERROR: Source dist does not exist! Please run build first.");
   process.exit(1);
 }
 
-const indexHtml = path.join(webAppDist, "index.html");
+const indexHtml = path.join(sourceDist, "index.html");
 if (!fs.existsSync(indexHtml)) {
-  console.error("[sync-app-dist] ERROR: web-app/dist/index.html not found!");
+  console.error("[sync-app-dist] ERROR: index.html not found in source dist!");
   process.exit(1);
 }
 
