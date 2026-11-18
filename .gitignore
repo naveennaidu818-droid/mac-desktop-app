@@ -9,4 +9,4 @@ yarn-error.log*
 .env
 .DS_Store
 Thumbs.db
-src/app-dist/
+# src/app-dist/ (included for bundled desktop distribution)

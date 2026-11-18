@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VitelGlobal - You are offline</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        background: #f2f4f8;
+        color: #0f172a;
+      }
+      .wrap {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .card {
+        max-width: 420px;
+        width: 100%;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 16px;
+        padding: 28px;
+        box-shadow: 0 20px 40px rgba(15, 23, 42, 0.08);
+        text-align: center;
+      }
+      .icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 56px;
+        height: 56px;
+        border-radius: 9999px;
+        background: #eef2ff;
+        color: #174eea;
+        margin-bottom: 16px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 20px;
+        line-height: 1.3;
+      }
+      p {
+        margin: 0;
+        color: #475569;
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      .status {
+        margin-top: 16px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 9999px;
+        background: #fff7ed;
+        color: #9a3412;
+        border: 1px solid #fed7aa;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 9999px;
+        background: #9a3412;
+      }
+      .actions {
+        margin-top: 18px;
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-radius: 9999px;
+        border: 1px solid #e5e7eb;
+        background: #ffffff;
+        color: #0f172a;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        text-decoration: none;
+      }
+      .btn:hover {
+        background: #f8fafc;
+      }
+      .btnPrimary {
+        background: #174eea;
+        color: #ffffff;
+        border-color: #174eea;
+      }
+      .btnPrimary:hover {
+        background: #123fbd;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="1" y1="1" x2="23" y2="23" />
+            <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55" />
+            <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39" />
+            <path d="M10.71 5.05A16 16 0 0 1 22.56 9" />
+            <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88" />
+            <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+            <line x1="12" y1="20" x2="12.01" y2="20" />
+          </svg>
+        </div>
+        <h1>You are offline</h1>
+        <p>This app works offline. Previously synced data is still available in Calls, Chat, Contacts, Meetings, and more. It will sync automatically when you reconnect.</p>
+        <div class="status">
+          <span class="dot"></span>
+          <span>Offline</span>
+        </div>
+        <div class="actions">
+          <button type="button" class="btn btnPrimary" onClick="window.location.reload()">Retry now</button>
+          <button type="button" class="btn" onClick="window.location.href='/chat'">Open Chat</button>
+          <button type="button" class="btn" onClick="window.location.href='/calls'">Open Calls</button>
+          <button type="button" class="btn" onClick="window.location.href='/contacts'">Open Contacts</button>
+          <button type="button" class="btn" onClick="window.location.href='/meetings'">Open Meetings</button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
