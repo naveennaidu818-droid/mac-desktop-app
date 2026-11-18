@@ -61,8 +61,8 @@ jobs:
 
       - name: Restore notarization API key
         env:
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID || 'D75ZL2XFR6' }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER || '69a6de8d-ba3f-47e3-e053-5b8c7c11a4d1' }}
           APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
         shell: bash
         run: |
