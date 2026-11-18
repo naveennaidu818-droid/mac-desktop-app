@@ -1303,39 +1303,177 @@ function showCapturePicker(sources, respond, audio, ownerWindow, requestingId) {
   void capturePickerWin.loadFile(PICKER_HTML).catch(() => finishCapture(null, "user-cancelled"));
 }
 
+const PERMITTED_PERMISSIONS = new Set([
+  "media",
+  "microphone",
+  "camera",
+  "display-capture",
+  "notifications",
+  "fullscreen",
+  "clipboard-sanitized-write",
+  "clipboard-read",
+  "geolocation"
+]);
+
+let lastPermissionDeniedDialogAt = 0;
+
+function promptMacOSMediaPermissionSettings(mediaType, ownerWindow) {
+  if (process.platform !== "darwin") return;
+  const now = Date.now();
+  if (now - lastPermissionDeniedDialogAt < 5000) return;
+  lastPermissionDeniedDialogAt = now;
+
+  const isMic = mediaType === "microphone";
+  const title = isMic ? "Microphone Access Required" : "Camera Access Required";
+  const message = isMic
+    ? "Microphone access is disabled in macOS System Settings."
+    : "Camera access is disabled in macOS System Settings.";
+  const detail = isMic
+    ? "VitelGlobal Desktop requires microphone access to make and receive calls. Please enable VitelGlobal Desktop in macOS System Settings > Privacy & Security > Microphone, then try again."
+    : "VitelGlobal Desktop requires camera access for video meetings and calls. Please enable VitelGlobal Desktop in macOS System Settings > Privacy & Security > Camera, then try again.";
+  const settingsUrl = isMic
+    ? "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+    : "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera";
+
+  const win = (ownerWindow && !ownerWindow.isDestroyed()) ? ownerWindow : (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+  const showOpts = {
+    type: "warning",
+    title,
+    message,
+    detail,
+    buttons: ["Open System Settings", "Cancel"],
+    defaultId: 0,
+    cancelId: 1
+  };
+
+  const p = win ? dialog.showMessageBox(win, showOpts) : dialog.showMessageBox(showOpts);
+  p.then(({ response }) => {
+    if (response === 0) {
+      shell.openExternal(settingsUrl).catch((err) => {
+        log.warn(`[macOS Permissions] Failed to open System Settings for ${mediaType}:`, err);
+      });
+    }
+  }).catch(() => {});
+}
+
+async function ensureMacOSMediaAccess(mediaTypes, ownerWindow) {
+  if (process.platform !== "darwin" || !systemPreferences) return true;
+
+  const rawList = Array.isArray(mediaTypes) ? mediaTypes : [mediaTypes];
+  const devicesToCheck = new Set();
+  for (const t of rawList) {
+    if (t === "audio" || t === "microphone") devicesToCheck.add("microphone");
+    if (t === "video" || t === "camera") devicesToCheck.add("camera");
+  }
+  if (devicesToCheck.size === 0) return true;
+
+  for (const device of devicesToCheck) {
+    if (typeof systemPreferences.getMediaAccessStatus !== "function") continue;
+    const currentStatus = systemPreferences.getMediaAccessStatus(device);
+    log.info(`[macOS Permissions] Current TCC status for ${device}: ${currentStatus}`);
+
+    if (currentStatus === "granted") {
+      // Re-use already granted authorization permanently - do NOT prompt again
+      continue;
+    }
+
+    if (currentStatus === "not-determined") {
+      // First-time use: explicitly request authorization from the main process
+      // so macOS TCC attributes the grant to the primary bundle ID (com.vitelglobal.desktop)
+      if (typeof systemPreferences.askForMediaAccess === "function") {
+        log.info(`[macOS Permissions] Requesting initial authorization from macOS for ${device}...`);
+        const granted = await systemPreferences.askForMediaAccess(device);
+        log.info(`[macOS Permissions] Native prompt outcome for ${device}: ${granted}`);
+        if (!granted) return false;
+      }
+      continue;
+    }
+
+    if (currentStatus === "denied" || currentStatus === "restricted") {
+      log.warn(`[macOS Permissions] ${device} permission is ${currentStatus}. Displaying settings guidance.`);
+      promptMacOSMediaPermissionSettings(device, ownerWindow);
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function configureMediaAndPermissions(targetSession) {
   if (!targetSession) return;
 
-  targetSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
-    const permitted = new Set([
-      "media",
-      "microphone",
-      "camera",
-      "display-capture",
-      "notifications",
-      "fullscreen",
-      "clipboard-sanitized-write",
-      "clipboard-read",
-      "geolocation"
-    ]);
+  targetSession.setPermissionRequestHandler(async (webContents, permission, callback, details) => {
+    let answered = false;
+    const respond = (granted) => {
+      if (answered) return;
+      answered = true;
+      try {
+        callback(granted);
+      } catch (_) {}
+    };
+
+    if (permission === "media") {
+      const mediaTypes = details?.mediaTypes || (details?.mediaType ? [details.mediaType] : ["audio"]);
+      let ownerWindow = null;
+      try {
+        ownerWindow = BrowserWindow.fromWebContents(webContents);
+      } catch (_) {}
+      try {
+        const allowed = await ensureMacOSMediaAccess(mediaTypes, ownerWindow);
+        log.info("[macOS Permissions] Media request resolved:", { mediaTypes, allowed, requestingUrl: details?.requestingUrl });
+        respond(allowed);
+      } catch (err) {
+        log.error("[macOS Permissions] Failed to ensure media access:", err);
+        respond(false);
+      }
+      return;
+    }
+
+    if (permission === "microphone" || permission === "camera") {
+      let ownerWindow = null;
+      try {
+        ownerWindow = BrowserWindow.fromWebContents(webContents);
+      } catch (_) {}
+      try {
+        const allowed = await ensureMacOSMediaAccess([permission], ownerWindow);
+        log.info("[macOS Permissions] Direct permission resolved:", { permission, allowed });
+        respond(allowed);
+      } catch (err) {
+        log.error("[macOS Permissions] Failed to ensure direct access:", err);
+        respond(false);
+      }
+      return;
+    }
 
     log.info("Permission request auto-granted:", { permission, requestingUrl: details?.requestingUrl });
-    callback(permitted.has(permission));
+    respond(PERMITTED_PERMISSIONS.has(permission));
   });
 
-  targetSession.setPermissionCheckHandler((_webContents, permission) => {
-    return [
-      "media",
-      "microphone",
-      "camera",
-      "display-capture",
-      "notifications",
-      "fullscreen",
-      "clipboard-sanitized-write",
-      "clipboard-read",
-      "geolocation"
-    ].includes(permission);
+  targetSession.setPermissionCheckHandler((_webContents, permission, _origin, details) => {
+    if (permission === "media" || permission === "microphone" || permission === "camera") {
+      if (process.platform === "darwin" && systemPreferences?.getMediaAccessStatus) {
+        const rawTypes = details?.mediaTypes || (permission === "camera" ? ["camera"] : ["microphone"]);
+        for (const t of rawTypes) {
+          const device = (t === "audio" || t === "microphone") ? "microphone" : (t === "video" || t === "camera") ? "camera" : null;
+          if (device) {
+            const status = systemPreferences.getMediaAccessStatus(device);
+            if (status === "denied" || status === "restricted") return false;
+          }
+        }
+      }
+      return true;
+    }
+    return PERMITTED_PERMISSIONS.has(permission);
   });
+
+  if (typeof targetSession.setDevicePermissionHandler === "function") {
+    targetSession.setDevicePermissionHandler((details) => {
+      if (details.deviceType === "camera" || details.deviceType === "microphone") {
+        return true;
+      }
+      return false;
+    });
+  }
 
   if (typeof targetSession.setDisplayMediaRequestHandler === "function") {
     targetSession.setDisplayMediaRequestHandler(async (request, callback) => {

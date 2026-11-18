@@ -162,7 +162,8 @@
         "NSAudioCaptureUsageDescription": "VitelGlobal Desktop uses system audio only when you choose to share it during a meeting.",
         "NSScreenCaptureUsageDescription": "VitelGlobal Desktop uses screen recording only when you choose to share your screen during a meeting.",
         "NSCameraUseContinuityCameraDeviceType": true
-      }
+      },
+      "helperBundleId": "com.vitelglobal.desktop.helper"
     },
     "dmg": {
       "title": "VitelGlobal Desktop ${version}",
