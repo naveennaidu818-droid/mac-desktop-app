@@ -1,8 +1,46 @@
 "use strict";
 
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webFrame } = require("electron");
 
 const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
+
+// Ensure navigator.mediaDevices.getDisplayMedia converts intentional user cancellations
+// into W3C standard NotAllowedError instead of Electron's internal AbortError ("Invalid capture constraints").
+try {
+  webFrame.executeJavaScript(`
+    (() => {
+      if (window.__vitelDisplayMediaWrapped) return;
+      window.__vitelDisplayMediaWrapped = true;
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') return;
+      const _origGetDisplayMedia = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getDisplayMedia = async function (constraints) {
+        try {
+          return await _origGetDisplayMedia(constraints);
+        } catch (error) {
+          const isAbortOrConstraints = error && (
+            error.name === 'AbortError' ||
+            String(error.message || '').includes('Invalid capture constraints')
+          );
+          if (isAbortOrConstraints && typeof window.__vitelGetCaptureOutcome === 'function') {
+            try {
+              const outcome = await window.__vitelGetCaptureOutcome();
+              if (outcome && (outcome.reason === 'user-cancelled' || outcome.reason === 'closed' || outcome.reason === 'superseded' || outcome.reason === 'timeout')) {
+                throw new DOMException('Permission denied by user', 'NotAllowedError');
+              }
+            } catch (queryErr) {
+              if (queryErr && queryErr.name === 'NotAllowedError') {
+                throw queryErr;
+              }
+            }
+          }
+          throw error;
+        }
+      };
+    })();
+  `, true).catch(() => {});
+} catch (_) {}
+
+contextBridge.exposeInMainWorld("__vitelGetCaptureOutcome", () => invoke("screen-capture:get-outcome"));
 
 const clearIncomingCallNotification = () => {
   void invoke("app:clear-notifications", "incoming-call").catch(() => {});
@@ -51,6 +89,7 @@ contextBridge.exposeInMainWorld("vitelDesktop", {
   getMediaAccessStatus: (mediaType) => invoke("system:get-media-permission-status", mediaType),
   requestMediaAccess: (mediaType) => invoke("system:request-media-permission", mediaType),
   openPrivacySettings: (pane) => invoke("system:open-privacy-settings", pane),
+  getCaptureOutcome: () => invoke("screen-capture:get-outcome"),
   clearAllData: () => invoke("app:clear-all-data"),
   onDeepLink: (callback) => on("deep-link", callback),
   onDownloadProgress: (callback) => on("download:progress", callback),
@@ -82,4 +121,3 @@ contextBridge.exposeInMainWorld("vitelDesktop", {
     getKV: (key) => invoke("sqlite:get-kv", key),
   }
 });
-

@@ -7,6 +7,7 @@ const { pathToFileURL } = require("node:url");
 const {
   app,
   BrowserWindow,
+  webContents,
   Menu,
   Tray,
   nativeImage,
@@ -680,6 +681,7 @@ function createMainWindow() {
           autoHideMenuBar: true,
           webPreferences: {
             session: session.defaultSession,
+            preload: path.join(__dirname, "..", "preload", "index.js"),
             nodeIntegration: false,
             contextIsolation: true
           }
@@ -1180,12 +1182,24 @@ function configureAutoUpdater() {
 const PICKER_HTML = path.join(__dirname, "..", "picker", "picker.html");
 let capturePickerWin = null;
 let pendingCapture = null;
+let lastCaptureOutcome = null;
+const lastCaptureOutcomeByContents = new Map();
 
-function finishCapture(source) {
+function finishCapture(source, reason = (source ? "selected" : "user-cancelled")) {
   if (!pendingCapture) return;
   const request = pendingCapture;
   pendingCapture = null;
   clearTimeout(request.timer);
+
+  lastCaptureOutcome = {
+    reason,
+    sourceId: source?.id || null,
+    timestamp: Date.now()
+  };
+  if (request.requestingId) {
+    lastCaptureOutcomeByContents.set(request.requestingId, lastCaptureOutcome);
+  }
+
   const captureWindow = capturePickerWin;
   capturePickerWin = null;
   if (captureWindow && !captureWindow.isDestroyed()) {
@@ -1223,10 +1237,13 @@ function finishCapture(source) {
   }
 }
 
-function showCapturePicker(sources, respond, audio, ownerWindow) {
+function showCapturePicker(sources, respond, audio, ownerWindow, requestingId) {
+  if (pendingCapture) {
+    finishCapture(null, "superseded");
+  }
   if (capturePickerWin && !capturePickerWin.isDestroyed()) {
-    capturePickerWin.focus();
-    return;
+    try { capturePickerWin.destroy(); } catch (_) {}
+    capturePickerWin = null;
   }
   const parentWin = (ownerWindow && !ownerWindow.isDestroyed())
     ? ownerWindow
@@ -1258,8 +1275,9 @@ function showCapturePicker(sources, respond, audio, ownerWindow) {
     sources,
     respond,
     audio,
+    requestingId,
     ownerWindow: parentWin,
-    timer: setTimeout(() => finishCapture(null), 60000)
+    timer: setTimeout(() => finishCapture(null, "timeout"), 60000)
   };
   capturePickerWin.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   capturePickerWin.webContents.on("will-navigate", (event) => event.preventDefault());
@@ -1281,8 +1299,8 @@ function showCapturePicker(sources, respond, audio, ownerWindow) {
       );
     }
   });
-  capturePickerWin.on("closed", () => finishCapture(null));
-  void capturePickerWin.loadFile(PICKER_HTML).catch(() => finishCapture(null));
+  capturePickerWin.on("closed", () => finishCapture(null, "user-cancelled"));
+  void capturePickerWin.loadFile(PICKER_HTML).catch(() => finishCapture(null, "user-cancelled"));
 }
 
 function configureMediaAndPermissions(targetSession) {
@@ -1335,7 +1353,19 @@ function configureMediaAndPermissions(targetSession) {
         }
       };
 
+      let requestingWebContents = null;
+      try {
+        if (request.frame && typeof webContents.fromFrame === "function") {
+          requestingWebContents = webContents.fromFrame(request.frame);
+        }
+      } catch (_) {}
+      const requestingId = requestingWebContents && !requestingWebContents.isDestroyed() ? requestingWebContents.id : null;
+
       if (process.platform === "darwin" && systemPreferences.getMediaAccessStatus?.("screen") === "denied") {
+        lastCaptureOutcome = { reason: "permission-denied", timestamp: Date.now() };
+        if (requestingId) {
+          lastCaptureOutcomeByContents.set(requestingId, lastCaptureOutcome);
+        }
         respond(null);
         dialog.showMessageBox({
           type: "warning",
@@ -1374,6 +1404,10 @@ function configureMediaAndPermissions(targetSession) {
           }
         }
         if (!sources.length) {
+          lastCaptureOutcome = { reason: "no-sources", timestamp: Date.now() };
+          if (requestingId) {
+            lastCaptureOutcomeByContents.set(requestingId, lastCaptureOutcome);
+          }
           respond(null);
           dialog.showMessageBox({
             type: "info",
@@ -1386,17 +1420,21 @@ function configureMediaAndPermissions(targetSession) {
 
         let ownerWindow = null;
         try {
-          if (request.frame && typeof BrowserWindow.fromWebFrameMain === "function") {
-            ownerWindow = BrowserWindow.fromWebFrameMain(request.frame);
+          if (requestingWebContents && !requestingWebContents.isDestroyed()) {
+            ownerWindow = BrowserWindow.fromWebContents(requestingWebContents);
           }
         } catch (_) {}
         if (!ownerWindow || ownerWindow.isDestroyed()) {
           ownerWindow = BrowserWindow.getFocusedWindow() || mainWindow;
         }
 
-        showCapturePicker(sources, respond, request.audioRequested, ownerWindow);
+        showCapturePicker(sources, respond, request.audioRequested, ownerWindow, requestingId);
       } catch (error) {
         log.error("Display media request failed", error);
+        lastCaptureOutcome = { reason: "error", timestamp: Date.now() };
+        if (requestingId) {
+          lastCaptureOutcomeByContents.set(requestingId, lastCaptureOutcome);
+        }
         respond(null);
       }
     });
@@ -1469,13 +1507,22 @@ function registerIpc() {
     }
     if (!pendingCapture) return { ok: false };
     if (id === null) {
-      finishCapture(null);
+      finishCapture(null, "user-cancelled");
       return { ok: true };
     }
     const source = pendingCapture.sources.find((value) => value.id === id);
     if (!source) return { ok: false };
-    finishCapture(source);
+    finishCapture(source, "selected");
     return { ok: true };
+  });
+
+  ipcMain.handle("screen-capture:get-outcome", (event) => {
+    const senderId = event.sender?.id;
+    const outcome = lastCaptureOutcomeByContents.get(senderId) || lastCaptureOutcome;
+    if (outcome && (Date.now() - outcome.timestamp < 10000)) {
+      return { ok: true, reason: outcome.reason, elapsed: Date.now() - outcome.timestamp };
+    }
+    return { ok: false, reason: "none" };
   });
 
   ipcMain.handle("app:get-info", () => ({
@@ -1851,6 +1898,7 @@ function registerIpc() {
         show: false,
         webPreferences: {
           session: portalSession,
+          preload: path.join(__dirname, "..", "preload", "index.js"),
           nodeIntegration: false,
           contextIsolation: true
         }
@@ -1971,6 +2019,7 @@ function registerIpc() {
               autoHideMenuBar: true,
               webPreferences: {
                 session: portalSession,
+                preload: path.join(__dirname, "..", "preload", "index.js"),
                 nodeIntegration: false,
                 contextIsolation: true
               }
