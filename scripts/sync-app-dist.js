@@ -32,9 +32,34 @@ try {
   console.warn("[sync-app-dist] Warning: Could not rmSync targetDist, continuing with direct overwrite:", rmErr.message);
 }
 
-// Copy web-app/dist to src/app-dist
-fs.cpSync(webAppDist, targetDist, { recursive: true, force: true });
+// Copy source dist to src/app-dist
+fs.cpSync(sourceDist, targetDist, { recursive: true, force: true });
 
-console.log("[sync-app-dist] Successfully synced web-app/dist to exe-file/src/app-dist!");
+// Also ensure public/ contents are available at root level (e.g. sounds, webrtc-phone, chat-picker)
+const publicDir = path.join(sourceDist, "public");
+if (fs.existsSync(publicDir)) {
+  const publicItems = fs.readdirSync(publicDir);
+  for (const item of publicItems) {
+    const srcItem = path.join(publicDir, item);
+    const destItem = path.join(targetDist, item);
+    if (!fs.existsSync(destItem)) {
+      fs.cpSync(srcItem, destItem, { recursive: true, force: true });
+    }
+  }
+}
+
+// Merge any media/sounds/webrtc assets from web-app/dist if present
+if (fs.existsSync(webAppDist)) {
+  const extraDirs = ["sounds", "webrtc-phone", "chat-picker"];
+  for (const dir of extraDirs) {
+    const srcDir = path.join(webAppDist, dir);
+    const destDir = path.join(targetDist, dir);
+    if (fs.existsSync(srcDir) && !fs.existsSync(destDir)) {
+      fs.cpSync(srcDir, destDir, { recursive: true, force: true });
+    }
+  }
+}
+
+console.log(`[sync-app-dist] Successfully synced ${sourceDist} to exe-file/src/app-dist!`);
 const fileCount = fs.readdirSync(targetDist, { recursive: true }).length;
 console.log(`[sync-app-dist] Total files copied: ${fileCount}`);
