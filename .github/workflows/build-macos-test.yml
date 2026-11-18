@@ -21,7 +21,7 @@ permissions:
 jobs:
   package:
     name: Build universal and dedicated macOS installers
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - name: Check out source
         uses: actions/checkout@v4
