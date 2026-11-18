@@ -104,21 +104,41 @@ jobs:
           path: dist/mas/*x64*.pkg
 
       - name: Upload to App Store Connect (If .p8 key is available)
-        if: ${{ github.event.inputs.upload_to_app_store == 'true' && env.APP_STORE_CONNECT_API_KEY != '' }}
+        if: ${{ github.event.inputs.upload_to_app_store == 'true' }}
         env:
-          API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID || 'D75ZL2XFR6' }}
-          API_ISSUER: ${{ secrets.APP_STORE_CONNECT_API_ISSUER || '69a6de8d-ba3f-47e3-e053-5b8c7c11a4d1' }}
-          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
         shell: bash
         run: |
-          mkdir -p ~/.appstoreconnect/private_keys
-          echo "$APP_STORE_CONNECT_API_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${API_KEY_ID}.p8
+          if [ -z "$APPLE_API_KEY_P8_BASE64" ]; then
+            echo "No App Store Connect API key found in secrets, skipping upload."
+            exit 0
+          fi
 
+          KEY_ID="${APPLE_API_KEY_ID:-D75ZL2XFR6}"
+          ISSUER="${APPLE_API_ISSUER:-69a6de8d-ba3f-47e3-e053-5b8c7c11a4d1}"
+
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
+          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
+
+          echo "Using App Store Connect Key ID: $KEY_ID, Issuer: $ISSUER"
+
+          UPLOADED=0
           for pkg in dist/mas/*.pkg; do
             if [ -f "$pkg" ]; then
               echo "Uploading $pkg to App Store Connect..."
               xcrun altool --upload-app -f "$pkg" -t osx \
-                --apiKey "$API_KEY_ID" \
-                --apiIssuer "$API_ISSUER"
+                --apiKey "$KEY_ID" \
+                --apiIssuer "$ISSUER" \
+                --verbose
+              UPLOADED=$((UPLOADED + 1))
             fi
           done
+
+          if [ "$UPLOADED" -eq 0 ]; then
+            echo "ERROR: No .pkg files found in dist/mas/ to upload!"
+            exit 1
+          fi
+          echo "Successfully uploaded $UPLOADED package(s) to App Store Connect."
