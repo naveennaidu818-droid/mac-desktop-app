@@ -20,7 +20,7 @@
     "dist:win": "npm run sync:dist && npm run assets && electron-builder --win nsis portable --config.directories.output=dist/windows",
     "dist:mac": "npm run dist:mac:release",
     "dist:mac:release": "node scripts/require-macos-release.js && npm run assets && electron-builder --mac dmg pkg zip --universal --config.directories.output=dist/macos && npm run verify:mac:release -- dist/macos",
-    "dist:mac:test": "npm run assets && electron-builder --mac dmg --universal --arm64 --x64 --config.directories.output=dist/macos-test --config.mac.hardenedRuntime=false --publish never",
+    "dist:mac:test": "npm run assets && electron-builder --mac dmg --universal --arm64 --x64 --config.directories.output=dist/macos-test --publish never",
     "pack:mac": "npm run assets && electron-builder --mac --dir --universal --arm64 --x64 --config.directories.output=dist/macos-unpacked",
     "verify:mac:release": "node scripts/verify-macos-release.js",
     "dist:linux": "npm run assets && electron-builder --linux AppImage deb rpm --config.directories.output=dist/linux",
@@ -137,14 +137,16 @@
       "minimumSystemVersion": "12.0.0",
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "artifactName": "${productName}-${version}-${arch}-macos.${ext}",
       "extendInfo": {
         "NSCameraUsageDescription": "VitelGlobal Desktop uses your camera for video meetings and calls.",
         "NSMicrophoneUsageDescription": "VitelGlobal Desktop uses your microphone for meetings and calls.",
         "NSAudioCaptureUsageDescription": "VitelGlobal Desktop uses system audio only when you choose to share it during a meeting.",
-        "NSScreenCaptureUsageDescription": "VitelGlobal Desktop uses screen recording only when you choose to share your screen during a meeting."
-      }
+        "NSScreenCaptureUsageDescription": "VitelGlobal Desktop uses screen recording only when you choose to share your screen during a meeting.",
+        "NSCameraUseContinuityCameraDeviceType": true
+      },
+      "helperBundleId": "com.vitelglobal.desktop.helper"
     },
     "dmg": {
       "title": "VitelGlobal Desktop ${version}",

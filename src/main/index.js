@@ -24,6 +24,14 @@ const {
   desktopCapturer
 } = require("electron");
 const log = require("electron-log/main");
+
+process.on("uncaughtException", (error) => {
+  log.error("CRITICAL: Uncaught exception in main process:", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  log.error("CRITICAL: Unhandled promise rejection in main process:", reason);
+});
 const sqliteDb = require("./database");
 
 function fillPortalLogin({ origin, username, password, attemptId }) {
@@ -550,6 +558,7 @@ function createMainWindow() {
     minWidth: 1024,
     minHeight: 720,
     show: false,
+    autoHideMenuBar: false,
     backgroundColor: "#f6f8ff",
     title: APP_NAME,
     icon: iconPath(),
@@ -565,8 +574,9 @@ function createMainWindow() {
     }
   });
 
-  mainWindow.autoHideMenuBar = true;
-  mainWindow.setMenuBarVisibility(false);
+  createMenu();
+  mainWindow.autoHideMenuBar = false;
+  mainWindow.setMenuBarVisibility(true);
 
   // Block Ctrl+Shift+K, Ctrl+Shift+I, F12 and other developer shortcuts
   mainWindow.webContents.on("before-input-event", (event, input) => {
@@ -610,18 +620,17 @@ function createMainWindow() {
   }
 
   mainWindow.on("close", (event) => {
-    if (!isQuitting && process.env.VITELGLOBAL_CLOSE_TO_TRAY !== "false") {
+    if (!isQuitting && process.env.VITELGLOBAL_CLOSE_TO_TRAY === "true") {
       event.preventDefault();
       mainWindow.hide();
       if (!backgroundNoticeShown) {
         backgroundNoticeShown = true;
-        showNativeNotification({
-          title: APP_NAME,
-          body: "Calls and notifications remain active in the background.",
-          silent: true
-        });
+        log.info("[Main] Calls and notifications remain active in background.");
       }
+      return;
     }
+    isQuitting = true;
+    app.quit();
   });
 
   mainWindow.on("focus", () => {
@@ -707,6 +716,25 @@ function createMainWindow() {
       );
     }
 
+    if (params.mediaType === "image") {
+      menuTemplate.push(
+        {
+          label: "Copy Image",
+          click: () => {
+            mainWindow.webContents.copyImageAt(params.x, params.y);
+          }
+        },
+        {
+          label: "Copy Image Address",
+          click: () => {
+            if (params.srcURL) {
+              clipboard.writeText(params.srcURL);
+            }
+          }
+        }
+      );
+    }
+
     if (params.selectionText && params.selectionText.trim().length > 0) {
       menuTemplate.push(
         { role: "copy", label: "Copy" }
@@ -729,7 +757,7 @@ function createMainWindow() {
         { role: "selectAll", label: "Select All" }
       );
     } else {
-      if (!params.selectionText && !params.linkURL) {
+      if (!params.selectionText && !params.linkURL && params.mediaType !== "image") {
         menuTemplate.push(
           { role: "copy", label: "Copy" },
           { role: "selectAll", label: "Select All" }
@@ -750,34 +778,26 @@ function createMainWindow() {
 
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
     log.warn("did-fail-load", { errorCode, errorDescription, validatedUrl, isMainFrame });
-    if (isMainFrame) {
-      if (splashWindow && !splashWindow.isDestroyed()) {
-        splashWindow.close();
-      }
+    if (!isMainFrame || errorCode === -3 || errorCode === 0) {
+      return;
+    }
+    const urlStr = String(validatedUrl || "");
+    if (urlStr.startsWith("app://") || urlStr.includes("offline.html") || urlStr.startsWith("file://")) {
+      return;
+    }
 
-      const isNetworkFailure = [
-        -106, // ERR_INTERNET_DISCONNECTED
-        -105, // ERR_NAME_NOT_RESOLVED
-        -102, // ERR_CONNECTION_REFUSED
-        -118, // ERR_CONNECTION_TIMED_OUT
-        -109, // ERR_ADDRESS_UNREACHABLE
-        -2,   // ERR_FAILED
-        -3    // ERR_ABORTED
-      ].includes(errorCode);
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.close();
+    }
 
+    // Only switch to offline on genuine network disconnections
+    const isNetworkDisconnected = [-106, -105, -102, -118, -109].includes(errorCode);
+    if (isNetworkDisconnected && mainWindow && !mainWindow.isDestroyed()) {
       const distPath = getAppDistPath();
-      if (isNetworkFailure && distPath && !String(validatedUrl || "").startsWith("app://")) {
-        log.info(`[Main] Network offline (${errorCode}: ${errorDescription}). Switching to local offline workspace with SQLite...`);
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.show();
-          mainWindow.loadURL("app://localhost/index.html");
-          return;
-        }
-      }
-
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.show();
-        mainWindow.loadURL(`${localPage("offline.html")}?code=${encodeURIComponent(errorCode)}&message=${encodeURIComponent(errorDescription)}`);
+      if (distPath) {
+        log.info(`[Main] Network disconnected (${errorCode}: ${errorDescription}). Loading local offline bundle...`);
+        mainWindow.loadFile(path.join(distPath, "index.html")).catch(() => {});
+        return;
       }
     }
   });
@@ -873,6 +893,8 @@ function showMainWindow(reason = "user") {
         }
       } catch (e) { }
     } else {
+      mainWindow.autoHideMenuBar = false;
+      mainWindow.setMenuBarVisibility(true);
       mainWindow.setAlwaysOnTop(true);
       mainWindow.focus();
       mainWindow.setAlwaysOnTop(false);
@@ -886,18 +908,23 @@ function showMainWindow(reason = "user") {
 }
 
 function createMenu() {
+  const isMac = process.platform === "darwin";
   const template = [
-    {
-      label: "VitelGlobal",
-      submenu: [
-        { label: "About VitelGlobal Desktop", click: () => showAboutWindow() },
-        { type: "separator" },
-        { label: "Check for Updates", click: () => checkForUpdates() },
-        { label: "Open Logs", click: () => shell.showItemInFolder(log.transports.file.getFile().path) },
-        { type: "separator" },
-        { role: "quit" }
-      ]
-    },
+    ...(isMac
+      ? [
+          {
+            label: "VitelGlobal",
+            submenu: [
+              { label: "About VitelGlobal Desktop", click: () => showAboutWindow() },
+              { type: "separator" },
+              { label: "Check for Updates", click: () => checkForUpdates() },
+              { label: "Open Logs", click: () => shell.showItemInFolder(log.transports.file.getFile().path) },
+              { type: "separator" },
+              { role: "quit" }
+            ]
+          }
+        ]
+      : []),
     {
       label: "File",
       submenu: [
@@ -923,7 +950,15 @@ function createMenu() {
         { type: "separator" },
         { label: "Choose File", accelerator: "CommandOrControl+O", click: () => chooseFiles(mainWindow) },
         { type: "separator" },
-        { label: "Minimize to Tray", click: () => mainWindow?.hide() }
+        ...(!isMac
+          ? [
+              { label: "Check for Updates", click: () => checkForUpdates() },
+              { label: "Open Logs", click: () => shell.showItemInFolder(log.transports.file.getFile().path) },
+              { type: "separator" }
+            ]
+          : []),
+        { label: "Minimize to Tray", click: () => mainWindow?.hide() },
+        ...(!isMac ? [{ role: "quit", label: "Exit" }] : [])
       ]
     },
     {
@@ -961,13 +996,21 @@ function createMenu() {
     {
       label: "Help",
       submenu: [
+        { label: "About VitelGlobal Desktop", click: () => showAboutWindow() },
+        { type: "separator" },
         { label: "VitelGlobal Website", click: () => shell.openExternal("https://www.vitelglobal.com/") },
         { label: "Launch Web App", click: () => shell.openExternal(APP_URL) }
       ]
     }
   ];
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  const appMenu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(appMenu);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setMenu(appMenu);
+    mainWindow.autoHideMenuBar = false;
+    mainWindow.setMenuBarVisibility(true);
+  }
 }
 
 function showAboutWindow() {
@@ -1024,8 +1067,8 @@ function quitAndInstallUpdate() {
     return false;
   }
   try {
-    log.info("Applying downloaded update via quitAndInstall...");
-    autoUpdater.quitAndInstall(false, true);
+    log.info("Applying downloaded update via quitAndInstall (silent)...");
+    autoUpdater.quitAndInstall(true, true);
     return true;
   } catch (err) {
     log.error("Failed to quit and install update:", err);
@@ -1056,6 +1099,15 @@ function configureAutoUpdater() {
 
   autoUpdater.on("checking-for-update", () => send("update:status", { status: "checking" }));
   autoUpdater.on("update-available", (info) => {
+    const currentVersion = app.getVersion();
+    try {
+      const semver = require("semver");
+      if (info?.version && !semver.gt(info.version, currentVersion)) {
+        log.info(`[AutoUpdater] Available version ${info.version} is not newer than installed ${currentVersion}. Ignoring.`);
+        send("update:status", { status: "not-available", info });
+        return;
+      }
+    } catch {}
     log.info("Update available:", info?.version);
     send("update:status", { status: "available", info });
   });
@@ -1066,6 +1118,22 @@ function configureAutoUpdater() {
     send("update:progress", progress);
   });
   autoUpdater.on("update-downloaded", (info) => {
+    const currentVersion = app.getVersion();
+    try {
+      const semver = require("semver");
+      if (info?.version && !semver.gt(info.version, currentVersion)) {
+        log.info(`[AutoUpdater] Downloaded version ${info.version} is not newer than installed ${currentVersion}. Cleaning cache.`);
+        try {
+          const pendingDir = path.join(app.getPath("appData"), "vitelglobal-desktop-updater", "pending");
+          if (fs.existsSync(pendingDir)) {
+            fs.rmSync(pendingDir, { recursive: true, force: true });
+          }
+        } catch {}
+        send("update:status", { status: "not-available", info });
+        return;
+      }
+    } catch {}
+
     log.info("Update downloaded:", info?.version, "isCallActive:", isCallActiveInApp);
     send("update:status", {
       status: "downloaded",
@@ -1123,16 +1191,35 @@ function finishCapture(source) {
   if (captureWindow && !captureWindow.isDestroyed()) {
     captureWindow.destroy();
   }
-  request.respond(source ? {
-    video: source,
-    ...(request.audio && process.platform === "win32" ? { audio: "loopback" } : {})
-  } : null);
+
+  let streamConfig = null;
+  if (source) {
+    streamConfig = { video: source };
+    // Only attempt loopback audio on win32 for entire screen captures when explicitly requested.
+    // Window-level loopback audio capture is unsupported and throws NotReadableError on Windows.
+    if (request.audio && process.platform === "win32" && String(source.id).startsWith("screen:")) {
+      streamConfig.audio = "loopback";
+    }
+  }
+
+  try {
+    request.respond(streamConfig);
+  } catch (err) {
+    log.error("Failed to respond to displayMedia request with loopback audio, attempting video-only fallback:", err);
+    try {
+      request.respond(source ? { video: source } : null);
+    } catch (_) {}
+  }
 
   // Restore focus to the window that initiated screen sharing (e.g., meeting window)
   if (request.ownerWindow && !request.ownerWindow.isDestroyed()) {
-    request.ownerWindow.focus();
+    try {
+      request.ownerWindow.focus();
+    } catch (_) {}
   } else if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.focus();
+    try {
+      mainWindow.webContents.focus();
+    } catch (_) {}
   }
 }
 
@@ -1145,11 +1232,12 @@ function showCapturePicker(sources, respond, audio, ownerWindow) {
     ? ownerWindow
     : (BrowserWindow.getFocusedWindow() || mainWindow || undefined);
 
-  const isModal = Boolean(parentWin);
+  // Keep modal: false and alwaysOnTop: true so the picker dialog never gets trapped
+  // or concealed behind full-screen meeting windows on customer machines.
   capturePickerWin = new BrowserWindow({
-    parent: parentWin || undefined,
-    modal: isModal,
-    alwaysOnTop: !isModal,
+    modal: false,
+    alwaysOnTop: true,
+    center: true,
     width: 860,
     height: 620,
     minWidth: 500,
@@ -1157,6 +1245,7 @@ function showCapturePicker(sources, respond, audio, ownerWindow) {
     title: "Choose what to share",
     autoHideMenuBar: true,
     backgroundColor: "#ffffff",
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, "..", "picker", "picker-preload.cjs"),
       nodeIntegration: false,
@@ -1174,6 +1263,12 @@ function showCapturePicker(sources, respond, audio, ownerWindow) {
   };
   capturePickerWin.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   capturePickerWin.webContents.on("will-navigate", (event) => event.preventDefault());
+  capturePickerWin.once("ready-to-show", () => {
+    if (capturePickerWin && !capturePickerWin.isDestroyed()) {
+      capturePickerWin.show();
+      capturePickerWin.focus();
+    }
+  });
   capturePickerWin.webContents.once("did-finish-load", () => {
     if (capturePickerWin && !capturePickerWin.isDestroyed()) {
       capturePickerWin.webContents.send(
@@ -1245,17 +1340,39 @@ function configureMediaAndPermissions(targetSession) {
         dialog.showMessageBox({
           type: "warning",
           title: "Screen Recording Permission Required",
-          message: "Screen recording permission is blocked by macOS.",
-          detail: "Please allow VitelGlobal Desktop in System Settings > Privacy & Security > Screen & System Audio Recording, then restart and rejoin your meeting."
+          message: "Screen recording permission is required to share your screen.",
+          detail: "Please enable VitelGlobal Desktop in macOS System Settings > Privacy & Security > Screen & System Audio Recording, then restart the application.",
+          buttons: ["Open System Settings", "Cancel"],
+          defaultId: 0,
+          cancelId: 1
+        }).then(({ response: btnIndex }) => {
+          if (btnIndex === 0) {
+            shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+          }
         }).catch(() => {});
         return;
       }
 
       try {
-        const sources = await desktopCapturer.getSources({
-          types: ["screen", "window"],
-          thumbnailSize: { width: 320, height: 180 }
-        });
+        let sources = [];
+        try {
+          sources = await desktopCapturer.getSources({
+            types: ["screen", "window"],
+            thumbnailSize: { width: 320, height: 180 },
+            fetchWindowIcons: true
+          });
+        } catch (capturerErr) {
+          log.warn("desktopCapturer with window failed, falling back to screen only:", capturerErr);
+          try {
+            sources = await desktopCapturer.getSources({
+              types: ["screen"],
+              thumbnailSize: { width: 320, height: 180 }
+            });
+          } catch (screenOnlyErr) {
+            log.error("desktopCapturer fallback failed:", screenOnlyErr);
+            sources = [];
+          }
+        }
         if (!sources.length) {
           respond(null);
           dialog.showMessageBox({
@@ -1296,6 +1413,12 @@ function configureSession() {
   }).catch(() => { });
 
   configureMediaAndPermissions(defaultSession);
+
+  app.on("web-contents-created", (_event, contents) => {
+    if (contents.session && contents.session !== session.defaultSession) {
+      configureMediaAndPermissions(contents.session);
+    }
+  });
 
   defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const headers = { ...details.responseHeaders };
@@ -1418,6 +1541,58 @@ function registerIpc() {
   ipcMain.handle("app:set-call-active", (_event, active) => {
     isCallActiveInApp = Boolean(active);
     return isCallActiveInApp;
+  });
+
+  // macOS Privacy & Permission IPC handlers
+  ipcMain.handle("system:get-media-permission-status", (_event, mediaType) => {
+    if (process.platform !== "darwin" || !systemPreferences?.getMediaAccessStatus) {
+      return "granted";
+    }
+    try {
+      const status = systemPreferences.getMediaAccessStatus(mediaType);
+      log.info(`[macOS Permissions] Status query for ${mediaType}:`, status);
+      return status; // 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown'
+    } catch (err) {
+      log.warn(`[macOS Permissions] Failed to get media access status for ${mediaType}:`, err);
+      return "unknown";
+    }
+  });
+
+  ipcMain.handle("system:request-media-permission", async (_event, mediaType) => {
+    if (process.platform !== "darwin" || !systemPreferences?.askForMediaAccess) {
+      return true;
+    }
+    try {
+      const current = systemPreferences.getMediaAccessStatus(mediaType);
+      if (current === "granted") return true;
+      if (current === "denied" || current === "restricted") {
+        log.warn(`[macOS Permissions] Request for ${mediaType} aborted: already ${current}`);
+        return false;
+      }
+      log.info(`[macOS Permissions] Prompting user for ${mediaType} access on demand...`);
+      return await systemPreferences.askForMediaAccess(mediaType);
+    } catch (err) {
+      log.warn(`[macOS Permissions] Failed to prompt for media access ${mediaType}:`, err);
+      return false;
+    }
+  });
+
+  ipcMain.handle("system:open-privacy-settings", async (_event, pane) => {
+    if (process.platform !== "darwin") return false;
+    try {
+      const paneMap = {
+        microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        camera: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
+        screen: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+      };
+      const url = paneMap[pane] || "x-apple.systempreferences:com.apple.preference.security?Privacy";
+      log.info(`[macOS Permissions] Opening system privacy settings for ${pane}: ${url}`);
+      await shell.openExternal(url);
+      return true;
+    } catch (err) {
+      log.warn(`[macOS Permissions] Failed to open macOS privacy settings for ${pane}:`, err);
+      return false;
+    }
   });
   function getPortalPartition(targetUrl = "") {
     const urlLower = String(targetUrl || "").toLowerCase();
@@ -2052,6 +2227,14 @@ app.on("open-url", (event, url) => {
   handleDeepLink(url);
 });
 
+app.on("window-all-closed", () => {
+  // If close-to-tray is enabled and user hasn't explicitly clicked Quit, keep the app alive in background/tray
+  if (!isQuitting && process.env.VITELGLOBAL_CLOSE_TO_TRAY !== "false") {
+    return;
+  }
+  app.quit();
+});
+
 app.on("before-quit", () => {
   isQuitting = true;
 });
@@ -2090,21 +2273,17 @@ app.whenReady().then(async () => {
 
   registerWindowsNotificationShortcut();
 
-  // Pre-request macOS System Media Permissions once at startup
+  // Log initial macOS media authorization status without triggering unprompted system dialogs
   if (process.platform === "darwin" && systemPreferences) {
     try {
-      if (typeof systemPreferences.getMediaAccessStatus === "function" && typeof systemPreferences.askForMediaAccess === "function") {
+      if (typeof systemPreferences.getMediaAccessStatus === "function") {
         const micStatus = systemPreferences.getMediaAccessStatus("microphone");
-        if (micStatus === "not-determined") {
-          await systemPreferences.askForMediaAccess("microphone");
-        }
         const camStatus = systemPreferences.getMediaAccessStatus("camera");
-        if (camStatus === "not-determined") {
-          await systemPreferences.askForMediaAccess("camera");
-        }
+        const screenStatus = systemPreferences.getMediaAccessStatus("screen");
+        log.info("[macOS Permissions] Current authorization status:", { microphone: micStatus, camera: camStatus, screen: screenStatus });
       }
     } catch (e) {
-      log.warn("Error requesting macOS media access:", e);
+      log.warn("[macOS Permissions] Failed to query media status on startup:", e);
     }
   }
 
@@ -2130,8 +2309,8 @@ app.whenReady().then(async () => {
   createTray();
   createSplashWindow();
   await createMainWindow();
-
-  // globalShortcut.register("CommandOrControl+Shift+V") removed).catch((err) => {
+  createMenu();
+}).catch((err) => {
   log.error("Fatal startup error in app.whenReady:", err);
 });
 

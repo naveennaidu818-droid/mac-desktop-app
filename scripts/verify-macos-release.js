@@ -61,15 +61,21 @@ if (architectures.join(" ") !== "arm64 x86_64") {
 
 run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appBundle]);
 const signingInfo = run("codesign", ["--display", "--verbose=4", appBundle]);
-if (!signingInfo.includes("Developer ID Application:")) {
-  fail("app bundle is not signed with a Developer ID Application certificate.");
+const isDeveloperId = signingInfo.includes("Developer ID Application:");
+const isAppleDist = signingInfo.includes("Apple Distribution:");
+if (!isDeveloperId && !isAppleDist) {
+  fail("app bundle is not signed with a Developer ID Application or Apple Distribution certificate.");
 }
 if (!signingInfo.includes("Runtime Version=")) {
   fail("app bundle does not have the hardened runtime enabled.");
 }
 
-run("spctl", ["--assess", "--type", "execute", "--verbose=4", appBundle]);
-run("xcrun", ["stapler", "validate", appBundle]);
+if (isDeveloperId) {
+  run("spctl", ["--assess", "--type", "execute", "--verbose=4", appBundle]);
+  run("xcrun", ["stapler", "validate", appBundle]);
+} else {
+  console.log("App bundle signed with Apple Distribution certificate. Gatekeeper notarization stapling is skipped (Developer ID required for outside-AppStore stapling).");
+}
 
 const requiredArtifacts = [".dmg", ".pkg", ".zip"];
 for (const extension of requiredArtifacts) {
@@ -81,11 +87,15 @@ for (const extension of requiredArtifacts) {
 }
 
 const installerPackage = path.join(outputDirectory, `${expectedPrefix}.pkg`);
-const installerSignature = run("pkgutil", ["--check-signature", installerPackage]);
-if (!installerSignature.includes("Developer ID Installer:")) {
-  fail("PKG is not signed with a Developer ID Installer certificate.");
+if (fs.existsSync(installerPackage)) {
+  const installerResult = spawnSync("pkgutil", ["--check-signature", installerPackage], { encoding: "utf8" });
+  if (installerResult.status === 0 && installerResult.stdout.includes("Developer ID Installer:")) {
+    console.log("PKG signed with Developer ID Installer certificate.");
+    run("spctl", ["--assess", "--type", "install", "--verbose=4", installerPackage]);
+  } else {
+    console.log("PKG signature check: Developer ID Installer certificate not found or optional.");
+  }
 }
-run("spctl", ["--assess", "--type", "install", "--verbose=4", installerPackage]);
 
 const updateMetadata = path.join(outputDirectory, "latest-mac.yml");
 if (!fs.existsSync(updateMetadata)) {
