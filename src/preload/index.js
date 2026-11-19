@@ -17,6 +17,15 @@ try {
         try {
           return await _origGetDisplayMedia(constraints);
         } catch (error) {
+          // If failure might be caused by loopback audio constraints unsupported on this platform,
+          // automatically retry with audio: false so screen video still starts cleanly
+          if (constraints && constraints.audio) {
+            try {
+              const videoOnly = { ...constraints, audio: false };
+              return await _origGetDisplayMedia(videoOnly);
+            } catch (_) {}
+          }
+
           const isAbortOrConstraints = error && (
             error.name === 'AbortError' ||
             String(error.message || '').includes('Invalid capture constraints')
@@ -24,7 +33,7 @@ try {
           if (isAbortOrConstraints && typeof window.__vitelGetCaptureOutcome === 'function') {
             try {
               const outcome = await window.__vitelGetCaptureOutcome();
-              if (outcome && (outcome.reason === 'user-cancelled' || outcome.reason === 'closed' || outcome.reason === 'superseded' || outcome.reason === 'timeout')) {
+              if (outcome && (outcome.reason === 'user-cancelled' || outcome.reason === 'closed' || outcome.reason === 'superseded' || outcome.reason === 'timeout' || outcome.reason === 'permission-denied' || outcome.reason === 'no-sources')) {
                 throw new DOMException('Permission denied by user', 'NotAllowedError');
               }
             } catch (queryErr) {

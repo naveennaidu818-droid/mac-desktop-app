@@ -1270,6 +1270,12 @@ function showCapturePicker(sources, respond, audio, ownerWindow, requestingId) {
       sandbox: true
     }
   });
+
+  // On macOS, ensure the picker window is visible across all spaces, including full-screen meeting windows
+  if (process.platform === "darwin") {
+    capturePickerWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    capturePickerWin.setAlwaysOnTop(true, "floating");
+  }
   capturePickerWin.removeMenu();
   pendingCapture = {
     sources,
@@ -1542,17 +1548,47 @@ function configureMediaAndPermissions(targetSession) {
           }
         }
         if (!sources.length) {
-          lastCaptureOutcome = { reason: "no-sources", timestamp: Date.now() };
+          const isDarwin = process.platform === "darwin";
+          const screenStatus = isDarwin && systemPreferences.getMediaAccessStatus ? systemPreferences.getMediaAccessStatus("screen") : "granted";
+          const isPermissionIssue = isDarwin && screenStatus !== "granted";
+
+          lastCaptureOutcome = { reason: isPermissionIssue ? "permission-denied" : "no-sources", timestamp: Date.now() };
           if (requestingId) {
             lastCaptureOutcomeByContents.set(requestingId, lastCaptureOutcome);
           }
           respond(null);
-          dialog.showMessageBox({
-            type: "info",
-            title: "No Screens Available",
-            message: "No screens or windows are available to share.",
-            detail: "Make sure the window you want to share is open and not minimized, and verify operating system screen recording permissions."
-          }).catch(() => {});
+
+          if (isPermissionIssue) {
+            dialog.showMessageBox({
+              type: "warning",
+              title: "Screen Recording Permission Required",
+              message: "macOS requires Screen Recording permission to share your screen.",
+              detail: "Please enable VitelGlobal Desktop in macOS System Settings > Privacy & Security > Screen & System Audio Recording, then restart the application.",
+              buttons: ["Open System Settings", "Cancel"],
+              defaultId: 0,
+              cancelId: 1
+            }).then(({ response: btnIndex }) => {
+              if (btnIndex === 0) {
+                shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+              }
+            }).catch(() => {});
+          } else {
+            dialog.showMessageBox({
+              type: "info",
+              title: "No Screens Available",
+              message: "No screens or windows are available to share.",
+              detail: isDarwin
+                ? "Make sure the window you want to share is not minimized, and verify that Screen Recording permission is enabled in System Settings."
+                : "Make sure the window you want to share is open and not minimized, and verify operating system screen recording permissions.",
+              buttons: isDarwin ? ["Check System Settings", "Cancel"] : ["OK"],
+              defaultId: 0,
+              cancelId: isDarwin ? 1 : 0
+            }).then(({ response: btnIndex }) => {
+              if (isDarwin && btnIndex === 0) {
+                shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+              }
+            }).catch(() => {});
+          }
           return;
         }
 
