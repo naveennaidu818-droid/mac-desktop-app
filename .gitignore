@@ -12,4 +12,5 @@ Thumbs.db
 *.p8
 *.p12
 *.key
+scripts/test_*
 # src/app-dist/ (included for bundled desktop distribution)

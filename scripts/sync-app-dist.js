@@ -6,20 +6,20 @@ const path = require("node:path");
 const rootDir = path.resolve(__dirname, "..");
 const chatAppDist = path.resolve(rootDir, "..", "chat-app", "frontend", "dist");
 const webAppDist = path.resolve(rootDir, "..", "web-app", "dist");
-const sourceDist = fs.existsSync(path.join(chatAppDist, "index.html")) ? chatAppDist : webAppDist;
+const sourceDist = fs.existsSync(path.join(webAppDist, "index.html"))
+  ? webAppDist
+  : (fs.existsSync(path.join(chatAppDist, "index.html")) ? chatAppDist : null);
 const targetDist = path.resolve(rootDir, "src", "app-dist");
 
 console.log("[sync-app-dist] Starting sync from:", sourceDist);
 console.log("[sync-app-dist] Target directory:", targetDist);
 
-if (!fs.existsSync(sourceDist)) {
-  console.error("[sync-app-dist] ERROR: Source dist does not exist! Please run build first.");
-  process.exit(1);
-}
-
-const indexHtml = path.join(sourceDist, "index.html");
-if (!fs.existsSync(indexHtml)) {
-  console.error("[sync-app-dist] ERROR: index.html not found in source dist!");
+if (!fs.existsSync(sourceDist) || !fs.existsSync(path.join(sourceDist, "index.html"))) {
+  if (fs.existsSync(path.join(targetDist, "index.html"))) {
+    console.log("[sync-app-dist] External source dist not found, but bundled src/app-dist is present. Preserving existing app-dist.");
+    process.exit(0);
+  }
+  console.error("[sync-app-dist] ERROR: Source dist does not exist and src/app-dist is missing! Please run build first.");
   process.exit(1);
 }
 
