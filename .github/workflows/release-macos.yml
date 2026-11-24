@@ -100,7 +100,21 @@ jobs:
       - name: Build, sign, notarize, and verify
         run: npm run dist:mac:release
 
-      - name: Upload macOS release artifacts
+      - name: Upload Universal macOS PKG installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitelglobal-desktop-macos-universal-pkg
+          if-no-files-found: error
+          path: dist/macos/*universal*.pkg
+
+      - name: Upload Universal macOS DMG installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitelglobal-desktop-macos-universal-dmg
+          if-no-files-found: error
+          path: dist/macos/*universal*.dmg
+
+      - name: Upload All macOS release artifacts
         uses: actions/upload-artifact@v4
         with:
           name: vitelglobal-desktop-macos-universal
