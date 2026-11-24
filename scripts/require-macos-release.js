@@ -13,7 +13,7 @@ function commandExists(command, args) {
 }
 
 function hasCertificateInKeychain(certificateType) {
-  const result = spawnSync("security", ["find-identity", "-v", "-p", "codesigning"], { encoding: "utf8" });
+  const result = spawnSync("security", ["find-identity", "-v"], { encoding: "utf8" });
   return result.status === 0 && new RegExp(`${certificateType}:`).test(`${result.stdout}\n${result.stderr}`);
 }
 

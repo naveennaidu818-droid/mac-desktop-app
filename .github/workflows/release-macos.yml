@@ -67,8 +67,8 @@ jobs:
             security default-keychain -s "$KEYCHAIN_PATH"
 
             echo "CSC_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-            echo "Installed and unlocked certificate(s) into build keychain. Code signing identities:"
-            security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+            echo "Installed and unlocked certificate(s) into build keychain. Code signing & installer identities:"
+            security find-identity -v "$KEYCHAIN_PATH"
           fi
 
       - name: Restore notarization API key
