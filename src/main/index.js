@@ -2385,7 +2385,21 @@ function registerIpc() {
           });
         } catch (_) {}
       }
+
+      // CRITICAL: Purge default session storage, cookies, and HTTP/ServiceWorker caches
+      try {
+        await session.defaultSession.clearStorageData({
+          storages: ["cookies", "localstorage", "websql", "indexdb", "serviceworkers", "cachestorage"]
+        });
+        await session.defaultSession.clearCache();
+        await session.defaultSession.clearHostResolverCache();
+        await session.defaultSession.clearAuthCache();
+      } catch (err) {
+        log.warn("[Electron] Error clearing defaultSession storage:", err);
+      }
+
       sqliteDb.clearSession();
+      log.info("[Electron] Complete logout purge: defaultSession and all partition caches cleared.");
       return true;
     } catch (err) {
       log.error("[Electron] clear-all-data error:", err);
