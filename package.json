@@ -151,6 +151,9 @@
     },
     "mas": {
       "type": "distribution",
+      "target": [
+        "pkg"
+      ],
       "hardenedRuntime": false,
       "category": "public.app-category.business",
       "entitlements": "build/entitlements.mas.plist",

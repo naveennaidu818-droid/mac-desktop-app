@@ -88,7 +88,17 @@ jobs:
           npm run test:notifications
 
       - name: Build Universal Mac App Store package
-        run: npm run dist:mas
+        run: |
+          npm run dist:mas
+          # Ensure signed PKG package is produced for Mac App Store
+          PKG_COUNT=$(find dist/mas -maxdepth 1 -name "*.pkg" | wc -l)
+          if [ "$PKG_COUNT" -eq 0 ]; then
+            echo "No PKG found in dist/mas root; packaging via productbuild..."
+            APP_PATH=$(find dist/mas -name "*.app" | head -n 1)
+            INSTALLER_IDENTITY=$(security find-identity -v "$CSC_KEYCHAIN" | grep "3rd Party Mac Developer Installer" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+            echo "Signing $APP_PATH with installer identity: $INSTALLER_IDENTITY"
+            productbuild --component "$APP_PATH" /Applications --sign "$INSTALLER_IDENTITY" --keychain "$CSC_KEYCHAIN" "dist/mas/VitelGlobal-Desktop-1.0.15-universal-mas.pkg"
+          fi
 
       - name: List MAS output artifacts
         run: |
