@@ -21,7 +21,7 @@
     "dist:mac": "npm run dist:mac:release",
     "dist:mac:release": "node scripts/require-macos-release.js && npm run assets && electron-builder --mac dmg pkg zip --universal --config.directories.output=dist/macos && npm run verify:mac:release -- dist/macos",
     "dist:mac:test": "npm run assets && electron-builder --mac dmg --universal --arm64 --x64 --config.directories.output=dist/macos-test --publish never",
-    "dist:mas": "npm run assets && electron-builder --mac mas pkg --universal --arm64 --x64 --config.directories.output=dist/mas --publish never",
+    "dist:mas": "npm run assets && electron-builder --mac mas --universal --config.directories.output=dist/mas --publish never",
     "pack:mac": "npm run assets && electron-builder --mac --dir --universal --arm64 --x64 --config.directories.output=dist/macos-unpacked",
     "verify:mac:release": "node scripts/verify-macos-release.js",
     "dist:linux": "npm run assets && electron-builder --linux AppImage deb rpm --config.directories.output=dist/linux",
@@ -155,6 +155,7 @@
       "category": "public.app-category.business",
       "entitlements": "build/entitlements.mas.plist",
       "entitlementsInherit": "build/entitlements.mas.inherit.plist",
+      "provisioningProfile": "build/embedded.provisionprofile",
       "artifactName": "${productName}-${version}-${arch}-mas.${ext}",
       "extendInfo": {
         "NSCameraUsageDescription": "VitelGlobal Desktop uses your camera for video meetings and calls.",
