@@ -41,7 +41,7 @@ async function writeDmgBackground() {
       </defs>
       <rect width="540" height="380" fill="url(#background)"/>
       <rect x="0" y="0" width="540" height="92" fill="#104d9d"/>
-      <text x="270" y="42" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="25" font-weight="700" text-anchor="middle">VitelGlobal Desktop</text>
+      <text x="270" y="42" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="25" font-weight="700" text-anchor="middle">Vitelglobal Pro Desktop</text>
       <text x="270" y="68" fill="#dbeafe" font-family="Arial, Helvetica, sans-serif" font-size="14" text-anchor="middle">Install VitelGlobal meetings on your Mac</text>
       <path d="M226 224 H311" stroke="#2563eb" stroke-width="4" stroke-linecap="round"/>
       <path d="M299 212 L311 224 L299 236" fill="none" stroke="#2563eb" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>

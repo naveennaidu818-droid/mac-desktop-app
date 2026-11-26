@@ -128,7 +128,7 @@ const {
   resolveNotificationAction
 } = require("./notificationPolicy");
 
-const APP_NAME = "VitelGlobal Desktop";
+const APP_NAME = "Vitelglobal Pro Desktop";
 const WINDOWS_APP_USER_MODEL_ID = "com.vitelglobal.desktop";
 const WINDOWS_TOAST_ACTIVATOR_CLSID = "{D7F34804-48E6-41EB-8EBA-57EEC402B21A}";
 const APP_URL = process.env.VITELGLOBAL_APP_URL || "https://desktop.officemeetings.net/";
@@ -236,7 +236,7 @@ function registerWindowsNotificationShortcut() {
     iconIndex: 0,
     appUserModelId: WINDOWS_APP_USER_MODEL_ID,
     toastActivatorClsid: WINDOWS_TOAST_ACTIVATOR_CLSID,
-    description: "VitelGlobal Desktop enterprise communications shell"
+    description: "Vitelglobal Pro Desktop enterprise communications shell"
   };
 
   try {
@@ -853,7 +853,7 @@ function createTray() {
   tray = new Tray(trayImg.isEmpty() ? nativeImage.createFromPath(iconPath()) : trayImg);
   tray.setToolTip(APP_NAME);
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "Show VitelGlobal Desktop", click: () => showMainWindow() },
+    { label: "Show Vitelglobal Pro Desktop", click: () => showMainWindow() },
     { label: "Hide", click: () => mainWindow?.hide() },
     { type: "separator" },
     { label: "Reload", click: () => mainWindow?.webContents.reload() },
@@ -917,7 +917,7 @@ function createMenu() {
           {
             label: "VitelGlobal",
             submenu: [
-              { label: "About VitelGlobal Desktop", click: () => showAboutWindow() },
+              { label: "About Vitelglobal Pro Desktop", click: () => showAboutWindow() },
               { type: "separator" },
               { label: "Check for Updates", click: () => checkForUpdates() },
               { label: "Open Logs", click: () => shell.showItemInFolder(log.transports.file.getFile().path) },
@@ -998,7 +998,7 @@ function createMenu() {
     {
       label: "Help",
       submenu: [
-        { label: "About VitelGlobal Desktop", click: () => showAboutWindow() },
+        { label: "About Vitelglobal Pro Desktop", click: () => showAboutWindow() },
         { type: "separator" },
         { label: "VitelGlobal Website", click: () => shell.openExternal("https://www.vitelglobal.com/") },
         { label: "Launch Web App", click: () => shell.openExternal(APP_URL) }
@@ -1146,7 +1146,7 @@ function configureAutoUpdater() {
     if (!isCallActiveInApp) {
       showNativeNotification({
         title: "Update ready",
-        body: `VitelGlobal Desktop ${info?.version || ""} is ready to install.`
+        body: `Vitelglobal Pro Desktop ${info?.version || ""} is ready to install.`
       });
     } else {
       showNativeNotification({
@@ -1335,8 +1335,8 @@ function promptMacOSMediaPermissionSettings(mediaType, ownerWindow) {
     ? "Microphone access is disabled in macOS System Settings."
     : "Camera access is disabled in macOS System Settings.";
   const detail = isMic
-    ? "VitelGlobal Desktop requires microphone access to make and receive calls. Please enable VitelGlobal Desktop in macOS System Settings > Privacy & Security > Microphone, then try again."
-    : "VitelGlobal Desktop requires camera access for video meetings and calls. Please enable VitelGlobal Desktop in macOS System Settings > Privacy & Security > Camera, then try again.";
+    ? "Vitelglobal Pro Desktop requires microphone access to make and receive calls. Please enable Vitelglobal Pro Desktop in macOS System Settings > Privacy & Security > Microphone, then try again."
+    : "Vitelglobal Pro Desktop requires camera access for video meetings and calls. Please enable Vitelglobal Pro Desktop in macOS System Settings > Privacy & Security > Camera, then try again.";
   const settingsUrl = isMic
     ? "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
     : "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera";
@@ -1515,7 +1515,7 @@ function configureMediaAndPermissions(targetSession) {
           type: "warning",
           title: "Screen Recording Permission Required",
           message: "Screen recording permission is required to share your screen.",
-          detail: "Please enable VitelGlobal Desktop in macOS System Settings > Privacy & Security > Screen & System Audio Recording, then restart the application.",
+          detail: "Please enable Vitelglobal Pro Desktop in macOS System Settings > Privacy & Security > Screen & System Audio Recording, then restart the application.",
           buttons: ["Open System Settings", "Cancel"],
           defaultId: 0,
           cancelId: 1
@@ -1563,7 +1563,7 @@ function configureMediaAndPermissions(targetSession) {
               type: "warning",
               title: "Screen Recording Permission Required",
               message: "macOS requires Screen Recording permission to share your screen.",
-              detail: "Please enable VitelGlobal Desktop in macOS System Settings > Privacy & Security > Screen & System Audio Recording, then restart the application.",
+              detail: "Please enable Vitelglobal Pro Desktop in macOS System Settings > Privacy & Security > Screen & System Audio Recording, then restart the application.",
               buttons: ["Open System Settings", "Cancel"],
               defaultId: 0,
               cancelId: 1

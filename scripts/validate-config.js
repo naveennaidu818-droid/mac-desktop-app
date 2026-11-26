@@ -37,7 +37,7 @@ const universalMacTargets = new Set(
 const assertions = [
   [pkg.main === "src/main/index.js", "package main points to Electron main process"],
   [pkg.build?.appId === "com.vitelglobal.desktop", "electron-builder appId configured"],
-  [pkg.build?.productName === "VitelGlobal Desktop", "installed desktop product keeps VitelGlobal branding"],
+  [pkg.build?.productName === "Vitelglobal Pro Desktop", "installed desktop product keeps VitelGlobal branding"],
   [pkg.build?.win?.icon === "build/icons/icon.ico", "Windows application uses generated VitelGlobal icon"],
   [pkg.build?.nsis?.artifactName === "desktop.officemeetings-${version}-${arch}-setup.${ext}", "Windows Setup uses desktop.officemeetings filename"],
   [pkg.build?.portable?.artifactName === "desktop.officemeetings-${version}-${arch}-portable.${ext}", "Windows Portable uses desktop.officemeetings filename"],

@@ -44,7 +44,7 @@ function safeScreen(value, type) {
 function sanitizeNotificationTitle(title = "") {
   const str = String(title || "");
   const cleaned = str.replace(/^[\?\s\uFFFD\u200B-\u200D\uFEFF]+/, "").trim();
-  return cleaned || "VitelGlobal Desktop";
+  return cleaned || "Vitelglobal Pro Desktop";
 }
 
 function normalizeNotificationPayload(payload = {}) {
@@ -66,7 +66,7 @@ function normalizeNotificationPayload(payload = {}) {
     : [type, String(sourceId || ""), String(payload.title || ""), String(payload.body || ""), String(isVideoFlag)].join("|");
 
   return {
-    title: sanitizeNotificationTitle(payload.title || "VitelGlobal Desktop").slice(0, 120),
+    title: sanitizeNotificationTitle(payload.title || "Vitelglobal Pro Desktop").slice(0, 120),
     body: String(payload.body || "").slice(0, 500),
     silent: Boolean(payload.silent),
     type,
